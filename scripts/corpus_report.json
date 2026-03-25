@@ -1,0 +1,2455 @@
+{
+  "dataset": "v1-train",
+  "total_tasks": 400,
+  "solved": 11,
+  "total_programs": 648,
+  "wall_time_sec": 1193.0,
+  "config": {
+    "max_steps": 5,
+    "timeout_sec": 10.0,
+    "max_candidates": 20000
+  },
+  "tasks": {
+    "007bbfb7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.986,
+      "programs": []
+    },
+    "00d62c1b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.739,
+      "programs": []
+    },
+    "017c7c7b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.272,
+      "programs": []
+    },
+    "025d127b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.406,
+      "programs": []
+    },
+    "045e512c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.546,
+      "programs": []
+    },
+    "0520fde7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.533,
+      "programs": []
+    },
+    "05269061": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.643,
+      "programs": []
+    },
+    "05f2a901": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.837,
+      "programs": []
+    },
+    "06df4c85": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "08ed6ac7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.094,
+      "programs": []
+    },
+    "09629e4f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.79,
+      "programs": []
+    },
+    "0962bcdd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.556,
+      "programs": []
+    },
+    "0a938d79": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.191,
+      "programs": []
+    },
+    "0b148d64": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.335,
+      "programs": []
+    },
+    "0ca9ddb6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.371,
+      "programs": []
+    },
+    "0d3d703e": {
+      "solved": true,
+      "num_programs": 1,
+      "time_sec": 1.094,
+      "programs": [
+        "let result: GRID = apply_color_map({3: 4, 1: 5, 2: 6, 8: 9, 5: 1, 6: 2, 9: 8, 4: 3}, input)\n-> result"
+      ]
+    },
+    "0dfd9992": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "0e206a2e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.058,
+      "programs": []
+    },
+    "10fcaaa3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.832,
+      "programs": []
+    },
+    "11852cab": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.377,
+      "programs": []
+    },
+    "1190e5a7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.139,
+      "programs": []
+    },
+    "137eaa0f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.096,
+      "programs": []
+    },
+    "150deff5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.818,
+      "programs": []
+    },
+    "178fcbfb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.458,
+      "programs": []
+    },
+    "1a07d186": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.419,
+      "programs": []
+    },
+    "1b2d62fb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.594,
+      "programs": []
+    },
+    "1b60fb0c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.084,
+      "programs": []
+    },
+    "1bfc4729": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.411,
+      "programs": []
+    },
+    "1c786137": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.0,
+      "programs": []
+    },
+    "1caeab9d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.573,
+      "programs": []
+    },
+    "1cf80156": {
+      "solved": true,
+      "num_programs": 12,
+      "time_sec": 1.747,
+      "programs": [
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = by_size_rank(-1, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = by_size_rank(0, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = singleton(objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = nth(0, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v3741: OBJECT = by_size_rank(-1, v100)\nlet v3849: GRID = from_object(v3741)\n-> v3849"
+      ]
+    },
+    "1e0a9b12": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.4,
+      "programs": []
+    },
+    "1e32b0e9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.399,
+      "programs": []
+    },
+    "1f0c79e5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.44,
+      "programs": []
+    },
+    "1f642eb9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.897,
+      "programs": []
+    },
+    "1f85a75f": {
+      "solved": true,
+      "num_programs": 3,
+      "time_sec": 10.001,
+      "programs": [
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = by_size_rank(0, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v5321: OBJECT = by_size_rank(0, v100)\nlet v5434: GRID = from_object(v5321)\n-> v5434",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v5854: OBJECT = by_size_rank(0, v101)\nlet v5967: GRID = from_object(v5854)\n-> v5967"
+      ]
+    },
+    "1f876c06": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.951,
+      "programs": []
+    },
+    "1fad071e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.686,
+      "programs": []
+    },
+    "2013d3e2": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.116,
+      "programs": []
+    },
+    "2204b7a8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.295,
+      "programs": []
+    },
+    "22168020": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.905,
+      "programs": []
+    },
+    "22233c11": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.912,
+      "programs": []
+    },
+    "2281f1f4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.032,
+      "programs": []
+    },
+    "228f6490": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.025,
+      "programs": []
+    },
+    "22eb0ac0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.189,
+      "programs": []
+    },
+    "234bbc79": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.723,
+      "programs": []
+    },
+    "23581191": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.338,
+      "programs": []
+    },
+    "239be575": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.01,
+      "programs": []
+    },
+    "23b5c85d": {
+      "solved": true,
+      "num_programs": 3,
+      "time_sec": 2.359,
+      "programs": [
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = by_size_rank(-1, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v4255: OBJECT = by_size_rank(-1, v100)\nlet v4368: GRID = from_object(v4255)\n-> v4368",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v4788: OBJECT = by_size_rank(-1, v101)\nlet v4901: GRID = from_object(v4788)\n-> v4901"
+      ]
+    },
+    "253bf280": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.632,
+      "programs": []
+    },
+    "25d487eb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.854,
+      "programs": []
+    },
+    "25d8a9c8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.111,
+      "programs": []
+    },
+    "25ff71a9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.075,
+      "programs": []
+    },
+    "264363fd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.0,
+      "programs": []
+    },
+    "272f95fa": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.532,
+      "programs": []
+    },
+    "27a28665": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.231,
+      "programs": []
+    },
+    "28bf18c6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.159,
+      "programs": []
+    },
+    "28e73c20": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.248,
+      "programs": []
+    },
+    "29623171": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.233,
+      "programs": []
+    },
+    "29c11459": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.232,
+      "programs": []
+    },
+    "29ec7d0e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "2bcee788": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.625,
+      "programs": []
+    },
+    "2bee17df": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.185,
+      "programs": []
+    },
+    "2c608aff": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.863,
+      "programs": []
+    },
+    "2dc579da": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.231,
+      "programs": []
+    },
+    "2dd70a9a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 8.681,
+      "programs": []
+    },
+    "2dee498d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.878,
+      "programs": []
+    },
+    "31aa019c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.065,
+      "programs": []
+    },
+    "321b1fc6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.084,
+      "programs": []
+    },
+    "32597951": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 8.996,
+      "programs": []
+    },
+    "3345333e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.025,
+      "programs": []
+    },
+    "3428a4f5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.536,
+      "programs": []
+    },
+    "3618c87e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.319,
+      "programs": []
+    },
+    "3631a71a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.002,
+      "programs": []
+    },
+    "363442ee": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.53,
+      "programs": []
+    },
+    "36d67576": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.055,
+      "programs": []
+    },
+    "36fdfd69": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.328,
+      "programs": []
+    },
+    "3906de3d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.974,
+      "programs": []
+    },
+    "39a8645d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.258,
+      "programs": []
+    },
+    "39e1d7f9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "3aa6fb7a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.395,
+      "programs": []
+    },
+    "3ac3eb23": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.296,
+      "programs": []
+    },
+    "3af2c5a8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.344,
+      "programs": []
+    },
+    "3bd67248": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.189,
+      "programs": []
+    },
+    "3bdb4ada": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.877,
+      "programs": []
+    },
+    "3befdf3e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.534,
+      "programs": []
+    },
+    "3c9b0459": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.2,
+      "programs": []
+    },
+    "3de23699": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.58,
+      "programs": []
+    },
+    "3e980e27": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.998,
+      "programs": []
+    },
+    "3eda0437": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.076,
+      "programs": []
+    },
+    "3f7978a0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.593,
+      "programs": []
+    },
+    "40853293": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.567,
+      "programs": []
+    },
+    "4093f84a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.566,
+      "programs": []
+    },
+    "41e4d17e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.225,
+      "programs": []
+    },
+    "4258a5f9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.566,
+      "programs": []
+    },
+    "4290ef0e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.066,
+      "programs": []
+    },
+    "42a50994": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.674,
+      "programs": []
+    },
+    "4347f46a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.019,
+      "programs": []
+    },
+    "444801d8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.557,
+      "programs": []
+    },
+    "445eab21": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.77,
+      "programs": []
+    },
+    "447fd412": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.23,
+      "programs": []
+    },
+    "44d8ac46": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.535,
+      "programs": []
+    },
+    "44f52bb0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.136,
+      "programs": []
+    },
+    "4522001f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.107,
+      "programs": []
+    },
+    "4612dd53": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.42,
+      "programs": []
+    },
+    "46442a0e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.873,
+      "programs": []
+    },
+    "469497ad": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.247,
+      "programs": []
+    },
+    "46f33fce": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.595,
+      "programs": []
+    },
+    "47c1f68c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.809,
+      "programs": []
+    },
+    "484b58aa": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.002,
+      "programs": []
+    },
+    "48d8fb45": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.895,
+      "programs": []
+    },
+    "4938f0c2": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.307,
+      "programs": []
+    },
+    "496994bd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.185,
+      "programs": []
+    },
+    "49d1d64f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.988,
+      "programs": []
+    },
+    "4be741c5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.828,
+      "programs": []
+    },
+    "4c4377d9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.955,
+      "programs": []
+    },
+    "4c5c2cf0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.588,
+      "programs": []
+    },
+    "50846271": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "508bd3b6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.295,
+      "programs": []
+    },
+    "50cb2852": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.467,
+      "programs": []
+    },
+    "5117e062": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.442,
+      "programs": []
+    },
+    "5168d44c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.105,
+      "programs": []
+    },
+    "539a4f51": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.365,
+      "programs": []
+    },
+    "53b68214": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.234,
+      "programs": []
+    },
+    "543a7ed5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.984,
+      "programs": []
+    },
+    "54d82841": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.31,
+      "programs": []
+    },
+    "54d9e175": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.427,
+      "programs": []
+    },
+    "5521c0d9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.885,
+      "programs": []
+    },
+    "5582e5ca": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.318,
+      "programs": []
+    },
+    "5614dbcf": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.09,
+      "programs": []
+    },
+    "56dc2b01": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.393,
+      "programs": []
+    },
+    "56ff96f3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.593,
+      "programs": []
+    },
+    "57aa92db": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.088,
+      "programs": []
+    },
+    "5ad4f10b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 8.727,
+      "programs": []
+    },
+    "5bd6f4ac": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.284,
+      "programs": []
+    },
+    "5c0a986e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.502,
+      "programs": []
+    },
+    "5c2c9af4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.842,
+      "programs": []
+    },
+    "5daaa586": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 6.28,
+      "programs": []
+    },
+    "60b61512": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.664,
+      "programs": []
+    },
+    "6150a2bd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.199,
+      "programs": []
+    },
+    "623ea044": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.816,
+      "programs": []
+    },
+    "62c24649": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.181,
+      "programs": []
+    },
+    "63613498": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.264,
+      "programs": []
+    },
+    "6430c8c4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.868,
+      "programs": []
+    },
+    "6455b5f5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.902,
+      "programs": []
+    },
+    "662c240a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.033,
+      "programs": []
+    },
+    "67385a82": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.275,
+      "programs": []
+    },
+    "673ef223": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.01,
+      "programs": []
+    },
+    "6773b310": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.465,
+      "programs": []
+    },
+    "67a3c6ac": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.528,
+      "programs": []
+    },
+    "67a423a3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.181,
+      "programs": []
+    },
+    "67e8384a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.144,
+      "programs": []
+    },
+    "681b3aeb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.479,
+      "programs": []
+    },
+    "6855a6e4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.75,
+      "programs": []
+    },
+    "68b16354": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.49,
+      "programs": []
+    },
+    "694f12f3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.335,
+      "programs": []
+    },
+    "6a1e5592": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.239,
+      "programs": []
+    },
+    "6aa20dc0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.747,
+      "programs": []
+    },
+    "6b9890af": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.505,
+      "programs": []
+    },
+    "6c434453": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.463,
+      "programs": []
+    },
+    "6cdd2623": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 7.249,
+      "programs": []
+    },
+    "6cf79266": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.876,
+      "programs": []
+    },
+    "6d0160f0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 6.426,
+      "programs": []
+    },
+    "6d0aefbc": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.176,
+      "programs": []
+    },
+    "6d58a25d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.045,
+      "programs": []
+    },
+    "6d75e8bb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.2,
+      "programs": []
+    },
+    "6e02f1e3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.943,
+      "programs": []
+    },
+    "6e19193c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.77,
+      "programs": []
+    },
+    "6e82a1ae": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.064,
+      "programs": []
+    },
+    "6ecd11f4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 6.897,
+      "programs": []
+    },
+    "6f8cd79b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.086,
+      "programs": []
+    },
+    "6fa7a44f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.145,
+      "programs": []
+    },
+    "72322fa7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.11,
+      "programs": []
+    },
+    "72ca375d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.653,
+      "programs": []
+    },
+    "73251a56": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "7447852a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.049,
+      "programs": []
+    },
+    "7468f01a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.444,
+      "programs": []
+    },
+    "746b3537": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.862,
+      "programs": []
+    },
+    "74dd1130": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.195,
+      "programs": []
+    },
+    "75b8110e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.364,
+      "programs": []
+    },
+    "760b3cac": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.551,
+      "programs": []
+    },
+    "776ffc46": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.474,
+      "programs": []
+    },
+    "77fdfe62": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.227,
+      "programs": []
+    },
+    "780d0b14": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.427,
+      "programs": []
+    },
+    "7837ac64": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.0,
+      "programs": []
+    },
+    "794b24be": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.933,
+      "programs": []
+    },
+    "7b6016b9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.832,
+      "programs": []
+    },
+    "7b7f7511": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.928,
+      "programs": []
+    },
+    "7c008303": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.505,
+      "programs": []
+    },
+    "7ddcd7ec": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.318,
+      "programs": []
+    },
+    "7df24a62": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 5.496,
+      "programs": []
+    },
+    "7e0986d6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 5.408,
+      "programs": []
+    },
+    "7f4411dc": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.16,
+      "programs": []
+    },
+    "7fe24cdd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.298,
+      "programs": []
+    },
+    "80af3007": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.192,
+      "programs": []
+    },
+    "810b9b61": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.649,
+      "programs": []
+    },
+    "82819916": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.12,
+      "programs": []
+    },
+    "83302e8f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 6.332,
+      "programs": []
+    },
+    "834ec97d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.809,
+      "programs": []
+    },
+    "8403a5d5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.244,
+      "programs": []
+    },
+    "846bdb03": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.654,
+      "programs": []
+    },
+    "855e0971": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 5.868,
+      "programs": []
+    },
+    "85c4e7cd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.352,
+      "programs": []
+    },
+    "868de0fa": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.144,
+      "programs": []
+    },
+    "8731374e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.002,
+      "programs": []
+    },
+    "88a10436": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.53,
+      "programs": []
+    },
+    "88a62173": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.42,
+      "programs": []
+    },
+    "890034e9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "8a004b2b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.407,
+      "programs": []
+    },
+    "8be77c9e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.304,
+      "programs": []
+    },
+    "8d5021e8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.882,
+      "programs": []
+    },
+    "8d510a79": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.224,
+      "programs": []
+    },
+    "8e1813be": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.703,
+      "programs": []
+    },
+    "8e5a5113": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.623,
+      "programs": []
+    },
+    "8eb1be9a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.443,
+      "programs": []
+    },
+    "8efcae92": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 7.025,
+      "programs": []
+    },
+    "8f2ea7aa": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.48,
+      "programs": []
+    },
+    "90c28cc7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "90f3ed37": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.272,
+      "programs": []
+    },
+    "913fb3ed": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.696,
+      "programs": []
+    },
+    "91413438": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.987,
+      "programs": []
+    },
+    "91714a58": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "9172f3a0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.233,
+      "programs": []
+    },
+    "928ad970": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.338,
+      "programs": []
+    },
+    "93b581b8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.344,
+      "programs": []
+    },
+    "941d9a10": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.062,
+      "programs": []
+    },
+    "94f9d214": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.557,
+      "programs": []
+    },
+    "952a094c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.986,
+      "programs": []
+    },
+    "9565186b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.953,
+      "programs": []
+    },
+    "95990924": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.298,
+      "programs": []
+    },
+    "963e52fc": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.596,
+      "programs": []
+    },
+    "97999447": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.199,
+      "programs": []
+    },
+    "97a05b5b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 8.125,
+      "programs": []
+    },
+    "98cf29f8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.396,
+      "programs": []
+    },
+    "995c5fa3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.626,
+      "programs": []
+    },
+    "99b1bc43": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.084,
+      "programs": []
+    },
+    "99fa7670": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.051,
+      "programs": []
+    },
+    "9aec4887": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.37,
+      "programs": []
+    },
+    "9af7a82c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.952,
+      "programs": []
+    },
+    "9d9215db": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.121,
+      "programs": []
+    },
+    "9dfd6313": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.243,
+      "programs": []
+    },
+    "9ecd008a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "9edfc990": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "9f236235": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 7.867,
+      "programs": []
+    },
+    "a1570a43": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.968,
+      "programs": []
+    },
+    "a2fd1cf0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.271,
+      "programs": []
+    },
+    "a3325580": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.079,
+      "programs": []
+    },
+    "a3df8b1e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.305,
+      "programs": []
+    },
+    "a416b8f3": {
+      "solved": true,
+      "num_programs": 616,
+      "time_sec": 1.145,
+      "programs": [
+        "let result: GRID = stack_h(input, input)\n-> result",
+        "let objs: OBJECT_SET = find_objects(input)\nlet result: GRID = stack_h(input, input)\n-> result",
+        "let d: DIMS = dims_of(input)\nlet result: GRID = stack_h(input, input)\n-> result",
+        "let zones: ZONE_LIST = find_zones(input)\nlet result: GRID = stack_h(input, input)\n-> result",
+        "let ccs: OBJECT_SET = connected_components(input)\nlet result: GRID = stack_h(input, input)\n-> result"
+      ]
+    },
+    "a48eeaf7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.906,
+      "programs": []
+    },
+    "a5313dff": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.797,
+      "programs": []
+    },
+    "a5f85a15": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.183,
+      "programs": []
+    },
+    "a61ba2ce": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.281,
+      "programs": []
+    },
+    "a61f2674": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.342,
+      "programs": []
+    },
+    "a64e4611": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "a65b410d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.165,
+      "programs": []
+    },
+    "a68b268e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.212,
+      "programs": []
+    },
+    "a699fb00": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.475,
+      "programs": []
+    },
+    "a740d043": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.287,
+      "programs": []
+    },
+    "a78176bb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.37,
+      "programs": []
+    },
+    "a79310a0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.196,
+      "programs": []
+    },
+    "a85d4709": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.11,
+      "programs": []
+    },
+    "a87f7484": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.549,
+      "programs": []
+    },
+    "a8c38be5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 5.211,
+      "programs": []
+    },
+    "a8d7556c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 8.843,
+      "programs": []
+    },
+    "a9f96cdd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.876,
+      "programs": []
+    },
+    "aabf363d": {
+      "solved": true,
+      "num_programs": 1,
+      "time_sec": 1.453,
+      "programs": [
+        "let result: GRID = apply_color_map({2: 4, 4: 0, 3: 6, 6: 0}, input)\n-> result"
+      ]
+    },
+    "aba27056": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.363,
+      "programs": []
+    },
+    "ac0a08a4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.981,
+      "programs": []
+    },
+    "ae3edfdc": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.066,
+      "programs": []
+    },
+    "ae4f1146": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.603,
+      "programs": []
+    },
+    "aedd82e4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.2,
+      "programs": []
+    },
+    "af902bf9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.805,
+      "programs": []
+    },
+    "b0c4d837": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.638,
+      "programs": []
+    },
+    "b190f7f5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.364,
+      "programs": []
+    },
+    "b1948b0a": {
+      "solved": true,
+      "num_programs": 2,
+      "time_sec": 1.264,
+      "programs": [
+        "let result: GRID = apply_color_map({6: 2}, input)\n-> result",
+        "let result: GRID = apply_color_map({2: 6, 6: 2}, input)\n-> result"
+      ]
+    },
+    "b230c067": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.153,
+      "programs": []
+    },
+    "b27ca6d3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.187,
+      "programs": []
+    },
+    "b2862040": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.126,
+      "programs": []
+    },
+    "b527c5c6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.294,
+      "programs": []
+    },
+    "b548a754": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.852,
+      "programs": []
+    },
+    "b60334d2": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.686,
+      "programs": []
+    },
+    "b6afb2da": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.284,
+      "programs": []
+    },
+    "b7249182": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.677,
+      "programs": []
+    },
+    "b775ac94": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 7.236,
+      "programs": []
+    },
+    "b782dc8a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 6.606,
+      "programs": []
+    },
+    "b8825c91": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "b8cdaf2b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.238,
+      "programs": []
+    },
+    "b91ae062": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.132,
+      "programs": []
+    },
+    "b94a9452": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.071,
+      "programs": []
+    },
+    "b9b7f026": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.706,
+      "programs": []
+    },
+    "ba26e723": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.186,
+      "programs": []
+    },
+    "ba97ae07": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.071,
+      "programs": []
+    },
+    "bb43febb": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.481,
+      "programs": []
+    },
+    "bbc9ae5d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.847,
+      "programs": []
+    },
+    "bc1d5164": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.574,
+      "programs": []
+    },
+    "bd4472b8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.386,
+      "programs": []
+    },
+    "bda2d7a6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.531,
+      "programs": []
+    },
+    "bdad9b1f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.25,
+      "programs": []
+    },
+    "be94b721": {
+      "solved": true,
+      "num_programs": 3,
+      "time_sec": 1.729,
+      "programs": [
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = by_size_rank(0, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v5321: OBJECT = by_size_rank(0, v100)\nlet v5434: GRID = from_object(v5321)\n-> v5434",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v5854: OBJECT = by_size_rank(0, v101)\nlet v5967: GRID = from_object(v5854)\n-> v5967"
+      ]
+    },
+    "beb8660c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.469,
+      "programs": []
+    },
+    "c0f76784": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.539,
+      "programs": []
+    },
+    "c1d99e64": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 5.586,
+      "programs": []
+    },
+    "c3e719e8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.466,
+      "programs": []
+    },
+    "c3f564a4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "c444b776": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.079,
+      "programs": []
+    },
+    "c59eb873": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.218,
+      "programs": []
+    },
+    "c8cbb738": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.312,
+      "programs": []
+    },
+    "c8f0f002": {
+      "solved": true,
+      "num_programs": 2,
+      "time_sec": 1.501,
+      "programs": [
+        "let result: GRID = apply_color_map({7: 5}, input)\n-> result",
+        "let result: GRID = apply_color_map({5: 7, 7: 5}, input)\n-> result"
+      ]
+    },
+    "c909285e": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.002,
+      "programs": []
+    },
+    "c9e6f938": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.417,
+      "programs": []
+    },
+    "c9f8e694": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.489,
+      "programs": []
+    },
+    "caa06a1f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 7.145,
+      "programs": []
+    },
+    "cbded52d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.417,
+      "programs": []
+    },
+    "cce03e0d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.363,
+      "programs": []
+    },
+    "cdecee7f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.942,
+      "programs": []
+    },
+    "ce22a75a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.609,
+      "programs": []
+    },
+    "ce4f8723": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.227,
+      "programs": []
+    },
+    "ce602527": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.615,
+      "programs": []
+    },
+    "ce9e57f2": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.997,
+      "programs": []
+    },
+    "cf98881b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.737,
+      "programs": []
+    },
+    "d037b0a7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.11,
+      "programs": []
+    },
+    "d06dbe63": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.926,
+      "programs": []
+    },
+    "d07ae81c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.87,
+      "programs": []
+    },
+    "d0f5fe59": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.622,
+      "programs": []
+    },
+    "d10ecb37": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.457,
+      "programs": []
+    },
+    "d13f3404": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.105,
+      "programs": []
+    },
+    "d22278a0": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.461,
+      "programs": []
+    },
+    "d23f8c26": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.364,
+      "programs": []
+    },
+    "d2abd087": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.89,
+      "programs": []
+    },
+    "d364b489": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.849,
+      "programs": []
+    },
+    "d406998b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.173,
+      "programs": []
+    },
+    "d43fd935": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.242,
+      "programs": []
+    },
+    "d4469b4b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.517,
+      "programs": []
+    },
+    "d4a91cb9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.672,
+      "programs": []
+    },
+    "d4f3cd78": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.959,
+      "programs": []
+    },
+    "d511f180": {
+      "solved": true,
+      "num_programs": 2,
+      "time_sec": 2.659,
+      "programs": [
+        "let result: GRID = apply_color_map({8: 5, 5: 8}, input)\n-> result",
+        "let result: GRID = apply_color_map({5: 8, 8: 5}, input)\n-> result"
+      ]
+    },
+    "d5d6de2d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.956,
+      "programs": []
+    },
+    "d631b094": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.976,
+      "programs": []
+    },
+    "d687bc17": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.698,
+      "programs": []
+    },
+    "d6ad076f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.03,
+      "programs": []
+    },
+    "d89b689b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.917,
+      "programs": []
+    },
+    "d8c310e9": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.886,
+      "programs": []
+    },
+    "d90796e8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.135,
+      "programs": []
+    },
+    "d9f24cd1": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.041,
+      "programs": []
+    },
+    "d9fac9be": {
+      "solved": true,
+      "num_programs": 3,
+      "time_sec": 2.255,
+      "programs": [
+        "let objs: OBJECT_SET = find_objects(input)\nlet mid: OBJECT = nth(0, objs)\nlet result: GRID = from_object(mid)\n-> result",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v14206: OBJECT = nth(0, v100)\nlet v14319: GRID = from_object(v14206)\n-> v14319",
+        "let v100: OBJECT_SET = find_objects(input)\nlet v101: OBJECT_SET = find_objects(input)\nlet v14739: OBJECT = nth(0, v101)\nlet v14852: GRID = from_object(v14739)\n-> v14852"
+      ]
+    },
+    "dae9d2b5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.268,
+      "programs": []
+    },
+    "db3e9e38": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.245,
+      "programs": []
+    },
+    "db93a21d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.721,
+      "programs": []
+    },
+    "dbc1a6ce": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.253,
+      "programs": []
+    },
+    "dc0a314f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.0,
+      "programs": []
+    },
+    "dc1df850": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.216,
+      "programs": []
+    },
+    "dc433765": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.137,
+      "programs": []
+    },
+    "ddf7fa4f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.806,
+      "programs": []
+    },
+    "de1cd16c": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 6.328,
+      "programs": []
+    },
+    "ded97339": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.005,
+      "programs": []
+    },
+    "e179c5f4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.072,
+      "programs": []
+    },
+    "e21d9049": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.958,
+      "programs": []
+    },
+    "e26a3af2": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.638,
+      "programs": []
+    },
+    "e3497940": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.147,
+      "programs": []
+    },
+    "e40b9e2f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.501,
+      "programs": []
+    },
+    "e48d4e1a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.797,
+      "programs": []
+    },
+    "e5062a87": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.255,
+      "programs": []
+    },
+    "e509e548": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.675,
+      "programs": []
+    },
+    "e50d258f": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.316,
+      "programs": []
+    },
+    "e6721834": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "e73095fd": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.586,
+      "programs": []
+    },
+    "e76a88a6": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.144,
+      "programs": []
+    },
+    "e8593010": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.199,
+      "programs": []
+    },
+    "e8dc4411": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.308,
+      "programs": []
+    },
+    "e9614598": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.663,
+      "programs": []
+    },
+    "e98196ab": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.906,
+      "programs": []
+    },
+    "e9afcf9a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.006,
+      "programs": []
+    },
+    "ea32f347": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.756,
+      "programs": []
+    },
+    "ea786f4a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.878,
+      "programs": []
+    },
+    "eb281b96": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.037,
+      "programs": []
+    },
+    "eb5a1d5d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 10.001,
+      "programs": []
+    },
+    "ec883f72": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.34,
+      "programs": []
+    },
+    "ecdecbb3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.156,
+      "programs": []
+    },
+    "ed36ccf7": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.906,
+      "programs": []
+    },
+    "ef135b50": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.347,
+      "programs": []
+    },
+    "f15e1fac": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.742,
+      "programs": []
+    },
+    "f1cefba8": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 5.778,
+      "programs": []
+    },
+    "f25fbde4": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.672,
+      "programs": []
+    },
+    "f25ffba3": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.655,
+      "programs": []
+    },
+    "f2829549": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.567,
+      "programs": []
+    },
+    "f35d900a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.194,
+      "programs": []
+    },
+    "f5b8619d": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.978,
+      "programs": []
+    },
+    "f76d97a5": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.228,
+      "programs": []
+    },
+    "f8a8fe49": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.135,
+      "programs": []
+    },
+    "f8b3ba0a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 4.865,
+      "programs": []
+    },
+    "f8c80d96": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.034,
+      "programs": []
+    },
+    "f8ff0b80": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.31,
+      "programs": []
+    },
+    "f9012d9b": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 2.003,
+      "programs": []
+    },
+    "fafffa47": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.605,
+      "programs": []
+    },
+    "fcb5c309": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 3.568,
+      "programs": []
+    },
+    "fcc82909": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.907,
+      "programs": []
+    },
+    "feca6190": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 0.932,
+      "programs": []
+    },
+    "ff28f65a": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 1.189,
+      "programs": []
+    },
+    "ff805c23": {
+      "solved": false,
+      "num_programs": 0,
+      "time_sec": 9.995,
+      "programs": []
+    }
+  }
+}
