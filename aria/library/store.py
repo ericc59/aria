@@ -72,6 +72,10 @@ class Library:
                 output=entry.output,
                 level=1,
                 use_count=entry.use_count,
+                support_task_ids=entry.support_task_ids,
+                support_program_count=entry.support_program_count,
+                mdl_gain=entry.mdl_gain,
+                signatures=entry.signatures,
             )
 
     def increment_use(self, name: str) -> None:
@@ -85,7 +89,25 @@ class Library:
                 output=entry.output,
                 level=entry.level,
                 use_count=entry.use_count + 1,
+                support_task_ids=entry.support_task_ids,
+                support_program_count=entry.support_program_count,
+                mdl_gain=entry.mdl_gain,
+                signatures=entry.signatures,
             )
+
+    def prune_weak(self) -> int:
+        """Remove entries with thin transfer evidence.
+
+        Weak = single supporting task AND zero or negative MDL gain.
+        Returns the count of entries removed.
+        """
+        to_remove = [
+            name for name, entry in self._entries.items()
+            if len(entry.support_task_ids) < 2 and entry.mdl_gain <= 0
+        ]
+        for name in to_remove:
+            del self._entries[name]
+        return len(to_remove)
 
     def names(self) -> list[str]:
         return list(self._entries.keys())
@@ -116,6 +138,10 @@ class Library:
                     "program": program_to_text(Program(steps=entry.steps, output=entry.output)),
                     "level": entry.level,
                     "use_count": entry.use_count,
+                    "support_task_ids": list(entry.support_task_ids),
+                    "support_program_count": entry.support_program_count,
+                    "mdl_gain": entry.mdl_gain,
+                    "signatures": list(entry.signatures),
                 }
                 for entry in self.all_entries()
             ],
@@ -172,6 +198,15 @@ class Library:
                 output=program.output,
                 level=int(item.get("level", 1)),
                 use_count=int(item.get("use_count", 0)),
+                support_task_ids=tuple(
+                    str(task_id) for task_id in item.get("support_task_ids", [])
+                    if task_id
+                ),
+                support_program_count=int(item.get("support_program_count", 0)),
+                mdl_gain=int(item.get("mdl_gain", 0)),
+                signatures=tuple(
+                    str(s) for s in item.get("signatures", []) if s
+                ),
             ))
 
         return library

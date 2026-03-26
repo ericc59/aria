@@ -495,3 +495,117 @@ register(
     ),
     _fill_cells,
 )
+
+
+# ---------------------------------------------------------------------------
+# Pattern stamping: apply spatial patterns around matching objects
+# ---------------------------------------------------------------------------
+
+
+def _stamp_around(
+    pred,
+    radius: int,
+    fill_color: int,
+    grid: Grid,
+    *,
+    mode: str = "chebyshev",
+) -> Grid:
+    """For each object matching pred, fill nearby bg pixels with fill_color.
+
+    mode controls which offsets are filled:
+    - "chebyshev": all pixels within Chebyshev distance (full square minus center)
+    - "cardinal": only pixels at cardinal offsets (Manhattan distance == radius, on axes)
+    - "diagonal": only pixels at diagonal offsets
+    """
+    from aria.runtime.ops.selection import _find_objects
+
+    result = grid.copy()
+    rows, cols = grid.shape
+    objects = _find_objects(grid)
+    matching = [obj for obj in objects if pred(obj)]
+
+    for obj in matching:
+        cx = obj.bbox[0] + obj.bbox[2] // 2  # center col
+        cy = obj.bbox[1] + obj.bbox[3] // 2  # center row
+
+        for dr in range(-radius, radius + 1):
+            for dc in range(-radius, radius + 1):
+                if dr == 0 and dc == 0:
+                    continue
+                r, c = cy + dr, cx + dc
+                if not (0 <= r < rows and 0 <= c < cols):
+                    continue
+
+                if mode == "chebyshev":
+                    if max(abs(dr), abs(dc)) <= radius:
+                        if int(result[r, c]) == 0 or int(grid[r, c]) == 0:
+                            result[r, c] = fill_color
+                elif mode == "cardinal":
+                    if (dr == 0) != (dc == 0):  # exactly one is zero
+                        if abs(dr) + abs(dc) <= radius:
+                            if int(result[r, c]) == 0 or int(grid[r, c]) == 0:
+                                result[r, c] = fill_color
+                elif mode == "diagonal":
+                    if abs(dr) == abs(dc) and abs(dr) <= radius:
+                        if int(result[r, c]) == 0 or int(grid[r, c]) == 0:
+                            result[r, c] = fill_color
+
+    return result
+
+
+def _fill_around(pred, radius: int, fill_color: int, grid: Grid) -> Grid:
+    """Fill all background pixels within Chebyshev distance of matching objects."""
+    return _stamp_around(pred, radius, fill_color, grid, mode="chebyshev")
+
+
+def _fill_cardinal(pred, radius: int, fill_color: int, grid: Grid) -> Grid:
+    """Fill background pixels at cardinal offsets from matching objects."""
+    return _stamp_around(pred, radius, fill_color, grid, mode="cardinal")
+
+
+def _fill_diagonal(pred, radius: int, fill_color: int, grid: Grid) -> Grid:
+    """Fill background pixels at diagonal offsets from matching objects."""
+    return _stamp_around(pred, radius, fill_color, grid, mode="diagonal")
+
+
+register(
+    "fill_around",
+    OpSignature(
+        params=(
+            ("pred", Type.PREDICATE),
+            ("radius", Type.INT),
+            ("fill_color", Type.COLOR),
+            ("grid", Type.GRID),
+        ),
+        return_type=Type.GRID,
+    ),
+    _fill_around,
+)
+
+register(
+    "fill_cardinal",
+    OpSignature(
+        params=(
+            ("pred", Type.PREDICATE),
+            ("radius", Type.INT),
+            ("fill_color", Type.COLOR),
+            ("grid", Type.GRID),
+        ),
+        return_type=Type.GRID,
+    ),
+    _fill_cardinal,
+)
+
+register(
+    "fill_diagonal",
+    OpSignature(
+        params=(
+            ("pred", Type.PREDICATE),
+            ("radius", Type.INT),
+            ("fill_color", Type.COLOR),
+            ("grid", Type.GRID),
+        ),
+        return_type=Type.GRID,
+    ),
+    _fill_diagonal,
+)

@@ -20,7 +20,8 @@ from aria.library.store import Library
 from aria.program_store import ProgramStore
 from aria.reporting import build_solve_report, extract_library_ops_used
 from aria.runtime.program import program_to_text
-from aria.solver import load_task, solve_task
+from aria.solver import SolveResult, load_task, solve_task
+from aria.trace_store import RefinementTraceStore
 from aria.types import Task, grid_eq
 
 
@@ -43,6 +44,7 @@ RESULTS_DIR = Path(__file__).parent.parent / "results"
 LOG_DIR = Path(__file__).parent.parent / "logs"
 DEFAULT_PROGRAM_STORE = RESULTS_DIR / "program_store.json"
 DEFAULT_LIBRARY_STORE = RESULTS_DIR / "library.json"
+DEFAULT_TRACE_STORE = RESULTS_DIR / "refinement_traces.json"
 
 log = logging.getLogger("aria.solve")
 
@@ -86,13 +88,49 @@ def _save_progress(results_file: Path, tasks: list[dict], config: dict) -> None:
         json.dump(report, f, indent=2, default=str)
 
 
+def _make_local_policy(policy_mode: str):
+    """Instantiate a LocalPolicy from a CLI mode string, or return None."""
+    if policy_mode == "heuristic":
+        return None
+    if policy_mode == "local_lm_dry":
+        from aria.local_policy import LocalCausalLMPolicy
+        return LocalCausalLMPolicy(dry_run=True)
+    raise ValueError(f"Unknown policy mode: {policy_mode}")
+
+
+def _persist_trace(
+    trace_store: RefinementTraceStore | None,
+    result: SolveResult,
+) -> None:
+    """Add a refinement trace record if we have a trace store and a result."""
+    if trace_store is None:
+        return
+    if result.refinement_result is not None:
+        trace_store.add_result(
+            task_id=result.task_id,
+            result=result.refinement_result,
+            task_signatures=result.task_signatures,
+        )
+        return
+    if result.retrieved and result.winning_program is not None:
+        trace_store.add_retrieval_result(
+            task_id=result.task_id,
+            winning_program=result.winning_program,
+            candidates_tried=result.retrieval_candidates_tried,
+            task_signatures=result.task_signatures,
+        )
+
+
 def solve_single(
     task: Task,
     task_id: str,
     library: Library,
     program_store: ProgramStore,
     args,
+    *,
+    trace_store: RefinementTraceStore | None = None,
 ) -> dict:
+    local_policy = _make_local_policy(getattr(args, "policy", "heuristic"))
     t0 = time.time()
     result = solve_task(
         task,
@@ -102,9 +140,16 @@ def solve_single(
         retrieval_limit=args.retrieval_limit,
         max_search_steps=args.max_search_steps,
         max_search_candidates=args.max_search_candidates,
+        max_refinement_rounds=args.max_refinement_rounds,
         include_core_ops=not args.library_only,
+        local_policy=local_policy,
+        beam_width=getattr(args, "beam_width", 0),
+        beam_rounds=getattr(args, "beam_rounds", 3),
+        beam_mutations_per_candidate=getattr(args, "beam_mutations_per_candidate", 30),
     )
     elapsed = time.time() - t0
+
+    _persist_trace(trace_store, result)
 
     outcome = {
         "task_id": task_id,
@@ -114,6 +159,7 @@ def solve_single(
         "searched": result.searched,
         "retrieval_candidates_tried": result.retrieval_candidates_tried,
         "search_candidates_tried": result.search_candidates_tried,
+        "refinement_rounds": result.refinement_rounds,
         "total_candidates": (
             result.retrieval_candidates_tried
             if result.retrieved
@@ -180,6 +226,12 @@ def main() -> None:
         help="Max GRID-valued candidates to verify during offline search",
     )
     parser.add_argument(
+        "--max-refinement-rounds",
+        type=int,
+        default=2,
+        help="Max verifier-guided refinement rounds after retrieval misses",
+    )
+    parser.add_argument(
         "--library-only",
         action="store_true",
         help="Search only library ops, not the full core DSL",
@@ -199,6 +251,40 @@ def main() -> None:
         "--library-store",
         default=str(DEFAULT_LIBRARY_STORE),
         help="Persisted library JSON path",
+    )
+    parser.add_argument(
+        "--policy",
+        choices=["heuristic", "local_lm_dry"],
+        default="heuristic",
+        help="Refinement policy mode (default: heuristic)",
+    )
+    parser.add_argument(
+        "--beam-width",
+        type=int,
+        default=0,
+        help="Beam refinement width (0=disabled, try 8 to enable)",
+    )
+    parser.add_argument(
+        "--beam-rounds",
+        type=int,
+        default=3,
+        help="Max beam mutation rounds",
+    )
+    parser.add_argument(
+        "--beam-mutations-per-candidate",
+        type=int,
+        default=30,
+        help="Max mutations to try per beam candidate per round",
+    )
+    parser.add_argument(
+        "--trace-store",
+        default=str(DEFAULT_TRACE_STORE),
+        help="Refinement trace store JSON path (default: results/refinement_traces.json)",
+    )
+    parser.add_argument(
+        "--no-traces",
+        action="store_true",
+        help="Disable refinement trace persistence",
     )
     parser.add_argument(
         "--snapshot-dir",
@@ -245,12 +331,20 @@ def main() -> None:
     )
     library = Library.load_json(library_path)
 
+    trace_store_path = Path(args.trace_store)
+    if args.no_traces:
+        trace_store = None
+    else:
+        trace_store = RefinementTraceStore.load_json(trace_store_path)
+
     results_file = Path(args.output) if args.output else RESULTS_DIR / f"{args.dataset}.json"
     print(f"Log: {log_file}")
     if snapshot_dir:
         print(f"Snapshot: {snapshot_dir}")
     print(f"Program store: {program_store_path} ({len(program_store)} programs)")
     print(f"Library store: {library_path} ({len(library.all_entries())} entries)")
+    if trace_store is not None:
+        print(f"Trace store: {trace_store_path} ({len(trace_store)} existing records)")
     if freeze_stores:
         print("Store mode: frozen")
     for note in imported_programs:
@@ -270,26 +364,40 @@ def main() -> None:
             f"Solving {args.task} ({len(task.train)} demos, "
             f"{task.train[0].input.shape} -> {task.train[0].output.shape})"
         )
+        beam_info = (
+            f", beam_width={args.beam_width}, "
+            f"beam_rounds={args.beam_rounds}, "
+            f"beam_mut={args.beam_mutations_per_candidate}"
+            if args.beam_width > 0 else ""
+        )
         print(
             "Engine: offline "
             f"(max_search_steps={args.max_search_steps}, "
             f"max_search_candidates={args.max_search_candidates}, "
-            f"core_ops={'off' if args.library_only else 'on'})"
+            f"max_refinement_rounds={args.max_refinement_rounds}, "
+            f"core_ops={'off' if args.library_only else 'on'}, "
+            f"policy={args.policy}{beam_info})"
         )
         print("-" * 60)
 
         task_program_store = program_store.clone() if freeze_stores else program_store
         task_library = library.clone() if freeze_stores else library
-        result = solve_single(task, args.task, task_library, task_program_store, args)
+        result = solve_single(
+            task, args.task, task_library, task_program_store, args,
+            trace_store=trace_store,
+        )
         if not freeze_stores:
             program_store.save_json(program_store_path)
             if library.all_entries():
                 library.save_json(library_path)
+        if trace_store is not None:
+            trace_store.save_json(trace_store_path)
 
         if result["solved"]:
             print(
                 f"\nSOLVED in {result['time_sec']}s "
-                f"({result['solve_source']}, {result['total_candidates']} cand)"
+                f"({result['solve_source']}, {result['total_candidates']} cand, "
+                f"{result['refinement_rounds']} rounds)"
             )
             print(f"\nProgram:\n{result['program']}")
             if result.get("library_ops_used"):
@@ -302,7 +410,8 @@ def main() -> None:
             print(
                 f"\nFAILED after {result['time_sec']}s "
                 f"(retrieval={result['retrieval_candidates_tried']}, "
-                f"search={result['search_candidates_tried']})"
+                f"search={result['search_candidates_tried']}, "
+                f"rounds={result['refinement_rounds']})"
             )
         return
 
@@ -317,9 +426,14 @@ def main() -> None:
         "retrieval_limit": args.retrieval_limit,
         "max_search_steps": args.max_search_steps,
         "max_search_candidates": args.max_search_candidates,
+        "max_refinement_rounds": args.max_refinement_rounds,
         "library_only": args.library_only,
+        "beam_width": args.beam_width,
+        "beam_rounds": args.beam_rounds,
+        "beam_mutations_per_candidate": args.beam_mutations_per_candidate,
         "snapshot_dir": str(snapshot_dir) if snapshot_dir else None,
         "freeze_stores": freeze_stores,
+        "trace_store": str(trace_store_path) if trace_store is not None else None,
     }
 
     all_tasks = list(existing.values())
@@ -327,11 +441,18 @@ def main() -> None:
     skipped = 0
 
     print(f"Solving {len(fnames)} tasks from {args.dataset}")
+    batch_beam_info = (
+        f", beam_width={args.beam_width}, "
+        f"beam_rounds={args.beam_rounds}, "
+        f"beam_mut={args.beam_mutations_per_candidate}"
+        if args.beam_width > 0 else ""
+    )
     print(
         "Engine: offline "
         f"(max_search_steps={args.max_search_steps}, "
         f"max_search_candidates={args.max_search_candidates}, "
-        f"core_ops={'off' if args.library_only else 'on'})"
+        f"max_refinement_rounds={args.max_refinement_rounds}, "
+        f"core_ops={'off' if args.library_only else 'on'}{batch_beam_info})"
     )
     if existing:
         print(f"Resuming: {len(existing)} already done, {solved} solved")
@@ -349,7 +470,10 @@ def main() -> None:
 
             task_program_store = program_store.clone() if freeze_stores else program_store
             task_library = library.clone() if freeze_stores else library
-            result = solve_single(task, task_id, task_library, task_program_store, args)
+            result = solve_single(
+                task, task_id, task_library, task_program_store, args,
+                trace_store=trace_store,
+            )
 
             existing[task_id] = result
             all_tasks = list(existing.values())
@@ -368,6 +492,8 @@ def main() -> None:
                 program_store.save_json(program_store_path)
                 if library.all_entries():
                     library.save_json(library_path)
+            if trace_store is not None:
+                trace_store.save_json(trace_store_path)
 
     except KeyboardInterrupt:
         print("\n\nInterrupted — saving progress...")
@@ -376,6 +502,8 @@ def main() -> None:
             program_store.save_json(program_store_path)
             if library.all_entries():
                 library.save_json(library_path)
+        if trace_store is not None:
+            trace_store.save_json(trace_store_path)
 
     report = build_solve_report(all_tasks, config)
     print("=" * 60)
@@ -399,6 +527,8 @@ def main() -> None:
     if report.get("library_ops_global"):
         print(f"Library ops in winning programs: {report['library_ops_global']}")
     print(f"\nResults saved to: {results_file}")
+    if trace_store is not None:
+        print(f"Trace store: {trace_store_path} ({len(trace_store)} records)")
 
 
 if __name__ == "__main__":

@@ -41,7 +41,7 @@ def _execute_safe(
         )
 
     if not grid_eq(result, expected):
-        diff = compute_diff(result, expected)
+        diff = compute_diff(result, expected, input_grid)
         return VerifyResult(
             passed=False,
             mode=VerifyMode.STATELESS,

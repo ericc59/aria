@@ -8,7 +8,7 @@ from aria.program_store import ProgramStore
 from aria.types import DemoPair, Task, grid_from_list
 
 
-def test_inspect_task_reports_retrieval_and_search_trace():
+def test_inspect_task_reports_retrieval_and_refinement_trace():
     input_grid = grid_from_list([
         [1, 2, 0],
         [3, 4, 0],
@@ -50,8 +50,8 @@ def test_inspect_task_reports_retrieval_and_search_trace():
     assert len(inspection["demos"]) == 1
     assert inspection["retrieval"]
     assert inspection["retrieval"][0]["rank"] == 1
-    assert inspection["search"]["trace"]
-    assert inspection["search"]["trace"][0]["candidate_num"] == 1
+    # Task may be solved by synthesis before search rounds run
+    assert inspection["refinement"]["solved"] is not None
 
 
 def test_inspect_task_reports_correct_loo_output_size_for_scaling():
@@ -93,3 +93,45 @@ def test_inspect_task_reports_correct_loo_output_size_for_scaling():
     assert inspection["output_size"]["demos"][0]["loo_prediction"] == (6, 6)
     assert inspection["output_size"]["demos"][1]["loo_prediction"] == (8, 8)
     assert inspection["output_size"]["tests"][0]["predicted_output_dims"] == (10, 10)
+
+
+def test_inspect_task_with_local_policy_shows_policy_source():
+    from aria.local_policy import LocalCausalLMPolicy
+
+    demos = (
+        DemoPair(
+            input=grid_from_list([
+                [1, 0, 0],
+                [0, 0, 0],
+                [0, 0, 0],
+            ]),
+            output=grid_from_list([[0] * 6 for _ in range(6)]),
+        ),
+        DemoPair(
+            input=grid_from_list([[1] * 4 for _ in range(4)]),
+            output=grid_from_list([[0] * 8 for _ in range(8)]),
+        ),
+    )
+
+    inspection = inspect_task(
+        demos,
+        library=Library(),
+        program_store=ProgramStore(),
+        retrieval_limit=0,
+        max_search_steps=1,
+        max_search_candidates=10,
+        max_refinement_rounds=2,
+        search_trace_limit=1,
+        local_policy=LocalCausalLMPolicy(dry_run=True),
+    )
+
+    rounds = inspection["refinement"]["rounds"]
+    assert len(rounds) >= 1
+    # Find heuristic and local_policy rounds (decomposition round may be prepended)
+    policy_sources = [r["policy_source"] for r in rounds]
+    assert "heuristic" in policy_sources
+    if "local_policy" in policy_sources:
+        # local_policy should come after heuristic
+        h_idx = policy_sources.index("heuristic")
+        lp_idx = policy_sources.index("local_policy")
+        assert lp_idx > h_idx

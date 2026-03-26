@@ -7,31 +7,33 @@
 ## Thesis
 
 ARIA is a step machine. It extracts a typed state graph from the input, then a
-learned proposer emits a multi-step program of typed bindings that can analyze the
-input, compute output dimensions, construct new grids, and read cross-demo context
-— all within a total, deterministic, exactly-verifiable runtime. Verified programs
-are decomposed and their reusable sub-sequences are admitted to a growing library,
-expanding the machine's vocabulary over time.
+typed offline runtime tries to solve the task by replaying verified programs,
+running bounded typed search, and iteratively refining failures using exact
+verifier feedback. A separate bootstrap proposer can be used offline during
+training to generate additional verified programs, which are then mined into a
+growing leaf-first memory, provenance-aware abstraction library, and frozen
+snapshots for benchmark runs.
 
 ---
 
 ## What this is
 
-Five components, one loop:
+Six components, two phases:
 
 1. Object-centric state graph extraction (deterministic, no learning)
 2. Typed step-machine runtime (fixed registry, currently 126 ops)
-3. Learned proposer (fine-tuned ~4B code model emitting typed step programs)
-4. Exact verification with three modes (stateless, leave-one-out, sequential)
-5. Growing abstraction library (verified sub-programs admitted via MDL gate)
+3. Exact verification with three modes (stateless, leave-one-out, sequential)
+4. Offline retrieval + typed search + verifier-driven refinement
+5. Leaf-first program store + provenance-aware abstraction library + frozen snapshots
+6. Optional bootstrap proposer for offline corpus generation only
 
-The proposer is the only neural component. Everything else is symbolic,
-deterministic, and inspectable.
+The runtime solving path is symbolic, deterministic, and inspectable. Neural
+components are confined to offline bootstrap/training workflows.
 
 ## What this is not
 
 - Not an ensemble of independent solvers that vote at the end
-- Not an LLM wrapper with a refinement harness
+- Not a remote-LLM runtime solver
 - Not a neural transduction model that predicts pixels directly
 - Not a brute-force search over arbitrary code
 - No "fallback to Python." Every solution is a typed, verifiable, inspectable
@@ -45,29 +47,25 @@ deterministic, and inspectable.
 ```
 Grid Pairs ──→ [1. State Graph Extraction] ──→ State Graphs + Deltas
                                                       │
-                                      ┌───────────────┘
-                                      ▼
-                              [2. Learned Proposer]  ←── Library index
-                                      │
-                                      ▼
-                          [Parser + Runtime Checks]
-                                      │  parse / exec error → re-propose
-                                      ▼
-                              [3. Runtime Execution]
-                                      │
-                                      ▼
-                              [4. Exact Verification]
+                                                      ▼
+                         [2. Program Store Retrieval + Typed Search]
+                                                      │
+                                                      ▼
+                              [3. Runtime Execution + Verification]
                                      / \
-                               pass /   \ fail (with structured error)
+                               pass /   \ fail (structured diff + trace)
                                    /     \
-                                  ▼       └──→ re-propose (max 4 rounds)
-                            Submit output
-                                  │
-                                  ▼
-                        [5. Abstraction Mining]
-                                  │
-                                  ▼
-                        [Library Admission Gate]
+                                  ▼       └──→ [4. Refinement Loop]
+                            Submit output             │
+                                  │                  ▼
+                                  └────→ [5. Trace / Program Persistence]
+                                                       │
+                                                       ▼
+                                           [6. Library Mining + Snapshots]
+
+Offline bootstrap phase:
+
+State Graphs + Deltas ──→ [Bootstrap Proposer] ──→ Verified Programs ──→ same persistence/mining pipeline
 ```
 
 ---
@@ -504,24 +502,30 @@ predict_dims(ctx: TASK_CTX, grid: GRID) -> DIMS
 
 ---
 
-## 3. Learned proposer
+## 3. Bootstrap proposer and future learned policy
 
 ### Purpose
 
-The only neural component. Given the state graph, deltas, and library index,
-emit candidate programs in the step language. Its contract is narrow:
+The current runtime solver in `scripts/solve.py` is offline-only and does not
+call a proposer. The proposer path lives in `scripts/bootstrap_solve.py` and is
+used only to bootstrap verified programs during training/corpus construction.
+
+Its contract is narrow:
 
 - Input: serialized state graph + deltas + available operations (core + library)
 - Output: a sequence of typed Bind/Assert/Yield steps in the runtime's syntax
 - NOT Python. NOT natural language. A small typed language that can be checked
-  in milliseconds.
+  in milliseconds and then filtered by exact verification.
 
 ### Architecture
 
-A ~4B parameter code-generation model (e.g., fine-tuned Qwen or CodeLlama).
-Not a frontier model. The proposer doesn't need to know about the world — it
-needs to be good at emitting 3-12 lines of typed code against the current DSL
-surface and op registry.
+Intended steady state: a small local model (for example a fine-tuned Qwen-class
+model) trained on verified programs and, eventually, refinement traces.
+
+Current implementation: `scripts/bootstrap_solve.py` can drive external
+providers for offline corpus generation. This is bootstrap infrastructure, not
+runtime architecture. The benchmark/runtime path must stay offline and model-free
+except for a future local learned search policy.
 
 ### Input format
 
@@ -582,9 +586,9 @@ verify, and all three failure modes are fed back to re-proposal.
 
 ### Generation strategy
 
-The proposer generates k=32 candidate programs per round using temperature
-sampling. Diversity matters more than precision at this stage — verification
-will filter. Programs are generated in parallel for efficiency.
+Bootstrap generation can sample multiple candidates per round and use
+verification as a filter. The exact provider, batch size, and retry policy are
+not part of the runtime contract.
 
 ### Training
 
@@ -630,9 +634,22 @@ On verification failure, the proposer receives structured feedback:
     ]
 ```
 
-The step trace is critical. It tells the proposer exactly where the computation
-diverged from the expected result, so it can fix specific steps rather than
-rewriting from scratch.
+The step trace is critical. It tells the bootstrap proposer, and later the local
+learned refinement policy, where the computation diverged from the expected
+result.
+
+### Current implementation note
+
+Today, ARIA already persists:
+- verified programs (`aria.program_store`)
+- learned library entries (`aria.library.store`)
+- refinement trajectories (`aria.trace_store`)
+
+The local learned runtime policy does not exist yet. The current refinement loop
+is heuristic and lives in `aria.refinement`. It now annotates every tried
+candidate with a generic diff-derived score (dimension correctness, pixel error,
+palette overlap, preserved-input ratio, changed-cell ratio, etc.), but the
+policy using that score is still hand-built.
 
 ---
 
@@ -640,9 +657,13 @@ rewriting from scratch.
 
 ### Purpose
 
-The one hard gate. Binary pass/fail, no soft scoring, no partial credit.
+The one hard gate. Binary pass/fail, no soft acceptance, no partial credit.
 Every candidate program is executed against the demo pairs. If the output
 doesn't match pixel-for-pixel, the program is rejected.
+
+Important distinction: verification itself remains binary, but the verifier also
+emits structured diffs that the refinement loop can score and use to rank
+"less wrong" candidates during search.
 
 ### Three verification modes
 
@@ -733,16 +754,29 @@ correct output.
 
 ### Purpose
 
-Verified programs are decomposed, and reusable sub-sequences are admitted
-into the library as new named operations, extending the runtime's vocabulary.
-This is the mechanism by which ARIA builds up domain knowledge over time.
+Verified programs are first stored as concrete leaves in the program store.
+Reusable sub-sequences are promoted into the permanent library only offline,
+from corpus evidence across tasks, and persisted with provenance metadata. This
+is the mechanism by which ARIA builds up domain knowledge over time without
+polluting the runtime with one-off abstractions.
 
 ### How it works
 
-#### Step 1: Decompose verified programs
+#### Step 1: Store verified leaves
 
-Every verified program is analyzed for sub-sequences of steps that form a
-self-contained "recipe" — a subsequence where:
+Every exact verified solve is stored in the program store as a concrete leaf:
+- full program text
+- task ids
+- signatures
+- sources / provenance
+
+Leaves are evidence. They are recallable, inspectable, and useful for retrieval,
+but they are not automatically promoted into the abstraction library.
+
+#### Step 2: Decompose corpus leaves into candidate abstractions
+
+Offline library building analyzes the stored verified corpus for sub-sequences
+of steps that form a self-contained "recipe" — a subsequence where:
 - The inputs are all bound before the subsequence starts
 - The outputs are used after the subsequence ends
 - The subsequence can be parameterized over the specific values used
@@ -765,7 +799,12 @@ mirror_and_recolor(axis: AXIS, old_c: COLOR, new_c: COLOR, grid: GRID) =
   return result
 ```
 
-#### Step 2: Score by MDL (Minimum Description Length)
+Candidates are aggregated by normalized structure and carry provenance:
+- supporting task ids
+- supporting source program count
+- MDL gain
+
+#### Step 3: Score by MDL (Minimum Description Length)
 
 Each candidate is scored by: does naming this sub-sequence make the total
 description of all verified programs shorter?
@@ -778,7 +817,7 @@ MDL_improvement = description_length(all_programs, old_library)
 If MDL improves (the total corpus gets shorter when we name this pattern),
 the candidate passes the compression test.
 
-#### Step 3: Type the new operation
+#### Step 4: Type the new operation
 
 The admitted abstraction gets a typed signature:
 
@@ -792,9 +831,8 @@ calls to it like any other operation.
 
 ### Admission gate (all must hold)
 
-1. The sub-sequence appeared in at least 2 independently verified programs.
-   (At test time, this threshold drops to 1 for temporary task-specific
-   abstractions.)
+1. The sub-sequence has support from at least 2 distinct verified tasks in the
+   offline corpus.
 
 2. MDL of the total program corpus improves when the abstraction is named.
 
@@ -810,16 +848,21 @@ The library starts with 126 core operations in the current implementation
 
 After processing the ARC training set (offline, during training), it grows
 to approximately 80-120 entries. These are the Level 1 abstractions — learned
-compositions that compress the training set.
+compositions that compress the training set and carry explicit provenance:
+- `support_task_ids`
+- `support_program_count`
+- `mdl_gain`
 
-At test time, task-specific candidates can be admitted temporarily for the
-duration of a single task (requiring only 1 verified use, not 2). These
-are Level 2 abstractions — they extend the proposer's vocabulary for the
-current problem without polluting the permanent library.
+Current implementation note:
+- the online runtime no longer admits single-task abstractions during solving
+- abstraction promotion happens offline through `scripts/build_library.py`
+- that builder now emits both `library.json` and `abstraction_graph.json`
+- during benchmark runs, the library and program store must be frozen via
+  snapshots; no eval-derived promotions happen mid-run
 
-After each evaluation session, Level 2 abstractions that were used successfully
-across multiple tasks are promoted to Level 1 (permanent). This is how the
-library grows over time.
+This is the core leaf-first rule:
+- online: store verified leaves
+- offline: promote abstractions from cross-task evidence
 
 ### Multi-step abstractions
 
@@ -849,46 +892,66 @@ can emit one step instead of five.
 
 ### Purpose
 
-When the first batch of proposals fails verification, retry with better signal.
-Not an ensemble. Not a meta-controller. Just structured retry.
+When retrieval or the first search round fails verification, retry with better
+signal. This is now part of the offline runtime, not just a proposer harness.
+The verifier provides the hard gate and the feedback signal.
 
 ### Protocol
 
 ```
-Round 1: Propose k=32 candidates. Type-check all. Execute and verify survivors.
-         If any pass → done.
+Round 0: Replay persisted verified programs from the program store.
+         Retrieval is transfer-first: prefer records with real cross-task
+         support before one-off replay leaves. If any exact-match under
+         verification → done.
 
-Round 2: Error-conditioned re-proposal. Proposer sees prior attempts + their
-         failure details (which demo failed, what the diff was, step trace
-         showing where computation diverged). Propose 32 more.
+Round 1: Generic typed search over the DSL/library with bounded budget.
+         Collect exact verifier output, diffs, and step traces for every tried
+         GRID-valued candidate.
 
-Round 3: Partial-match seeded re-proposal. Take programs from rounds 1-2 that
-         passed N-1 of N demos. Proposer sees these as "almost right, fix the
-         edge case." Propose 32 more.
-
-Round 4: Expanded library re-proposal. Compose new candidate abstractions on
-         the fly from existing library entries. Add them to the proposer's
-         available operations. Propose 32 more with the expanded vocabulary.
+Round 2+: Refinement rounds. Use verifier-derived feedback to narrow the search
+          surface (for example size-focused, color-map-focused, or
+          marker-geometry-focused), then run another bounded typed search over
+          that slice of the DSL.
 ```
 
-Maximum 4 rounds. Fixed budget, not an open-ended search.
+The current implementation is deliberately modest:
+- refinement chooses a coarse focus from verifier/search traces
+- every tried candidate now gets a generic diff-derived score so the system can
+  distinguish "less wrong" from "completely wrong"
+- inspection and trace persistence now expose those scores for debugging and
+  later local-model training
+- it does not yet perform AST-local program edits
 
-### Cost profile
+Those are the next planned upgrades.
 
-- Round 1 success (easy tasks): ~$0.10/task
-- Round 2 success (medium tasks): ~$0.50/task
-- Round 3-4 success (hard tasks): ~$2-3/task
-- All rounds fail: ~$3/task (wasted, but bounded)
-- Average target: ~$1/task
+### Runtime budget
 
-### Adaptive compute
+The runtime is bounded by:
+- retrieval candidate limit
+- max search steps
+- max verified GRID-valued candidates
+- max refinement rounds
 
-A lightweight difficulty estimator (based on state graph features: object count,
-delta complexity, whether tiling is detected, number of distinct colors) predicts
-how many rounds will likely be needed. Easy tasks get k=16 in round 1 (cheaper).
-Hard tasks get k=48 in round 1 (more diversity upfront).
+This keeps the solver inspectable and benchmark-safe. It is not an open-ended
+test-time compute harness.
 
-This is not a meta-controller. It's just a knob on the sampling budget.
+### Trace persistence
+
+Refinement rounds are persisted in `aria.trace_store` so the eventual local
+learned policy can be trained on transitions of the form:
+
+```
+(task signatures, current program, verifier feedback) -> next search/edit focus
+```
+
+Today these traces record round plans, candidate traces, verifier summaries, and
+winning programs when present.
+
+Retrieval itself is also becoming more provenance-aware: the goal is that
+retrieval solves can be explained as either:
+- transfer-backed leaf replay
+- abstraction-backed reuse
+rather than a flat "retrieval hit" bucket.
 
 ---
 
@@ -1042,17 +1105,35 @@ For each ARC-1/2 training task (1400 total):
 - Keep all distinct correct programs per task
 - Expect: 800-1000 tasks have at least one discoverable program
 
+Current benchmark stance:
+- ARC-1 is primarily corpus fuel and regression coverage
+- ARC-2 is the main architecture-direction scorecard
+
 For synthetic tasks (unlimited):
 - Sample random step sequences of length 3-10
 - Execute on random input grids to produce pairs
 - Filter for non-trivial tasks (at least 2 meaningful operations)
 - Target: 200,000 synthetic tasks
 
-### Phase 2: Proposer training (3 weeks)
+### Phase 2: Bootstrap corpus generation (2-3 weeks)
 
-Fine-tune a ~4B code model on (state_graph, deltas, program) triples.
-Multi-task objective: next-token prediction on program text, conditioned
-on structured input.
+Use `scripts/bootstrap_solve.py` plus enumeration to expand the verified corpus.
+The output of this phase is:
+- a larger verified leaf program store
+- a richer provenance-aware library snapshot
+- an `abstraction_graph.json` linking promoted abstractions to supporting leaves
+- persisted refinement traces for hard tasks
+
+This phase may use external models, but only offline on training data.
+
+### Phase 3: Local policy training (2-3 weeks)
+
+Train a small local model on:
+- `(state_graph, deltas) -> seed program / sketch`
+- `(task features, current program, verifier feedback) -> next refinement move`
+
+The second objective is the important one. The runtime needs a learned repair
+policy more than it needs a one-shot proposer.
 
 Curriculum:
 - Week 1: Synthetic tasks only (high volume, clean labels)
@@ -1060,24 +1141,31 @@ Curriculum:
 - Week 3: Hard-example mining — oversample tasks where the proposer fails,
   undersample tasks it solves in round 1
 
-### Phase 3: Library bootstrapping (1 week)
+### Phase 4: Library bootstrapping (1 week)
 
-Run the trained proposer on the full ARC training set. Collect all verified
-programs. Run the abstraction mining + MDL admission pipeline. Produce the
-Level 1 library (target: 80-120 entries).
+Run the bootstrap corpus through abstraction mining + MDL admission. Produce the
+Level 1 library and freeze a benchmark snapshot consisting of:
+- `program_store.json`
+- `library.json`
+- `abstraction_graph.json`
+- optional refinement trace store
 
-Re-train the proposer with the library available (1 additional fine-tuning
-pass). This teaches it to use library entries when they're applicable.
+Re-train the local policy with the library available so it learns to use library
+entries when applicable.
 
-### Phase 4: Evaluation and tuning (2 weeks)
+### Phase 5: Evaluation and tuning (ongoing)
 
 - ARC-AGI-1 public eval (400 tasks)
 - ARC-AGI-2 public eval (120 tasks)
-- Ablation studies: proposer without library, library without refinement,
-  single-round only, expression-only (no multi-step)
-- Cost profiling: measure actual $/task distribution
+- Ablation studies: retrieval-only, search without refinement, frozen library
+  without program store, refinement without traces, etc.
+- Analyze misses by category: perception, DSL expressiveness, search reachability,
+  bad refinement focus, missing library transfer
 
-Total: ~8 weeks. Not 16. The system is simpler now.
+Benchmark discipline:
+- runtime eval uses frozen snapshots only
+- no eval-time promotion into the permanent library/program store
+- no remote model calls in `scripts/solve.py`
 
 ---
 
@@ -1095,17 +1183,16 @@ Mitigation: The proposer can also learn to decompose inputs by emitting
 explicit crop/select steps. Zone decomposition is a convenience, not a
 requirement. If the heuristic fails, the proposer can work around it.
 
-### The proposer may not be good enough at 4B
+### The learned runtime policy may not be good enough at small scale
 
-Emitting 5-12 lines of typed code with correct step ordering and type
-agreement is hard for a small model. NVARC showed that 4B models can
-solve ARC tasks, but they were doing direct transduction, not program
-generation.
+Even after bootstrap, a small local model may struggle to choose the right next
+repair move over a large typed program space. The main learned component should
+eventually be a refinement policy, not just a one-shot proposer.
 
-Mitigation: parse-time, execution-time, and verification failures all produce
-cheap feedback, so bad proposals are still inexpensive to filter. If 4B proves
-insufficient, 7-8B is
-the next step, still well within efficient inference budgets.
+Mitigation: keep the learned policy narrow. Train it on refinement transitions,
+not only final solves. Let exact verification and bounded typed search remain
+the hard constraints around it. If needed, move from ~4B to ~7-8B locally
+without changing the runtime contract.
 
 ### The operation catalog may be incomplete
 
@@ -1148,7 +1235,8 @@ preferable to escaping into untyped code and losing verifiability.
 - Average cost per task: <$2
 - Median program length: 5-8 steps
 - Library size after training: 80-120 entries
-- Round 1 solve rate: 40-50% (the rest need refinement)
+- Direct retrieval/search solve rate should rise over time, but hard tasks are
+  expected to need refinement rounds
 
 These are lower than the v1 targets because they're honest. 55% on ARC-1
 with a clean, inspectable, typed system would be a meaningful result —
@@ -1175,10 +1263,11 @@ search, not LLM prompting) can compete with much more expensive approaches.
 ARIA v3:
 
   State graph    → immutable typed structure, deterministic extraction
-  Step machine   → multi-step programs with computed dims, zones, cross-demo
-  Proposer       → fine-tuned ~4B code model, emits typed step programs
+  Step machine   → multi-step typed programs with computed dims, zones, cross-demo
+  Runtime        → retrieval + typed search + verifier-driven refinement
   Verification   → three modes (stateless / LOO / sequential), exact, binary
   Library        → MDL-gated admission of verified multi-step sub-programs
+  Bootstrap      → optional offline proposer to expand the corpus
 
-  One machine. One loop. One thesis.
+  One machine. One offline runtime. One thesis.
 ```

@@ -31,6 +31,18 @@ class StoredProgram:
             if line.startswith(("let ", "bind ", "assert "))
         )
 
+    @property
+    def distinct_task_count(self) -> int:
+        return len(self.task_ids)
+
+    @property
+    def has_non_retrieval_source(self) -> bool:
+        return any(source != "offline-retrieval" for source in self.sources)
+
+    @property
+    def retrieval_echo_count(self) -> int:
+        return max(self.use_count - self.distinct_task_count, 0)
+
 
 class ProgramStore:
     """Deduplicated set of verified programs, persisted to disk."""
@@ -52,27 +64,34 @@ class ProgramStore:
     def ranked_records(
         self,
         signatures: frozenset[str] | None = None,
+        *,
+        transfer_only: bool = False,
     ) -> list[StoredProgram]:
         """Rank likely-useful programs first.
 
-        High-frequency and shorter programs are cheap to replay and more likely
-        to transfer, so prefer them before long one-off programs.
+        Distinct solved tasks are stronger transfer evidence than raw use_count,
+        because repeated sweeps can inflate use_count for the same task.
         """
         query_signatures = signatures or frozenset()
+        records = list(self._records.values())
+        if transfer_only:
+            records = [record for record in records if record.distinct_task_count >= 2]
 
-        def rank_key(record: StoredProgram) -> tuple[int, int, int, int, int, str]:
+        def rank_key(record: StoredProgram) -> tuple[int, int, int, int, int, int, int, str]:
             overlap = len(query_signatures & set(record.signatures)) if query_signatures else 0
             return (
                 -overlap,
-                -record.use_count,
+                -record.distinct_task_count,
+                -(1 if record.has_non_retrieval_source else 0),
                 record.step_count,
                 -len(record.signatures),
-                -len(record.task_ids),
+                -record.use_count,
+                record.retrieval_echo_count,
                 record.program_text,
             )
 
         return sorted(
-            self._records.values(),
+            records,
             key=rank_key,
         )
 
@@ -107,6 +126,33 @@ class ProgramStore:
             use_count=1,
             signatures=tuple(sorted(signatures or ())),
         )
+
+    def backfill_signatures(self, task_id: str, signatures: frozenset[str]) -> int:
+        """Add signatures to all records associated with *task_id*.
+
+        Returns the number of records updated.  Safe to call repeatedly — new
+        signatures are merged with any existing ones.
+        """
+        if not signatures:
+            return 0
+        updated = 0
+        sig_tuple = tuple(sorted(signatures))
+        for key, record in list(self._records.items()):
+            if task_id not in record.task_ids:
+                continue
+            existing = set(record.signatures)
+            if signatures <= existing:
+                continue
+            merged = tuple(sorted(existing | signatures))
+            self._records[key] = StoredProgram(
+                program_text=record.program_text,
+                task_ids=record.task_ids,
+                sources=record.sources,
+                use_count=record.use_count,
+                signatures=merged,
+            )
+            updated += 1
+        return updated
 
     def save_json(self, path: str | Path) -> None:
         output = Path(path)

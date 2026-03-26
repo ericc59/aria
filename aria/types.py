@@ -420,6 +420,10 @@ class LibraryEntry:
     output: str
     level: int  # 1 = permanent, 2 = task-specific
     use_count: int = 0
+    support_task_ids: tuple[str, ...] = ()
+    support_program_count: int = 0
+    mdl_gain: int = 0
+    signatures: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------

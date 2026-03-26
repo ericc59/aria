@@ -19,12 +19,15 @@ from aria.types import Assert, Bind, Call, Expr, Lambda, LibraryEntry, Literal, 
 class CandidateAggregate:
     entry: LibraryEntry
     program_indexes: frozenset[int]
+    support_task_ids: frozenset[str]
+    support_program_texts: frozenset[str]
     mdl_gain: int
 
 
 @dataclass(frozen=True)
 class LibraryBuildReport:
     corpus_programs: int
+    corpus_tasks: int
     candidates_mined: int
     aggregated_candidates: int
     admitted_entries: tuple[LibraryEntry, ...]
@@ -35,9 +38,14 @@ def programs_from_store(program_store: ProgramStore) -> list[Program]:
     programs: list[Program] = []
     for record in program_store.ranked_records():
         try:
-            programs.append(parse_program(record.program_text))
+            program = parse_program(record.program_text)
         except ParseError:
             continue
+        # Distinct task ids are the right notion of reuse evidence here.
+        # Replaying the same verified program across multiple tasks should count
+        # as multiple corpus observations when mining/promoting abstractions.
+        weight = max(record.distinct_task_count, 1)
+        programs.extend(program for _ in range(weight))
     return programs
 
 
@@ -49,12 +57,87 @@ def build_library_from_store(
     min_uses: int = 2,
     max_entries: int = 0,
 ) -> tuple[Library, LibraryBuildReport]:
-    return build_library(
-        programs_from_store(program_store),
-        min_length=min_length,
-        max_length=max_length,
+    weighted_programs = programs_from_store(program_store)
+    _AggValue = tuple[LibraryEntry, set[int], set[str], set[str], set[str]]
+    aggregates: dict[str, _AggValue] = {}
+    candidates_mined = 0
+
+    for prog_idx, record in enumerate(program_store.ranked_records()):
+        try:
+            program = parse_program(record.program_text)
+        except ParseError:
+            continue
+
+        for start, end in extract_candidates(program, min_length=min_length, max_length=max_length):
+            result = parameterize_candidate(program, start, end)
+            if result is None:
+                continue
+            params, steps, output_name = result
+            return_type = _infer_output_type(steps, output_name)
+            normalized = _normalize_entry(
+                params=params,
+                steps=steps,
+                output=output_name,
+                return_type=return_type,
+            )
+            candidates_mined += 1
+            key = _candidate_key(normalized)
+            existing = aggregates.get(key)
+            if existing is None:
+                aggregates[key] = (
+                    normalized,
+                    {prog_idx},
+                    set(record.task_ids),
+                    {record.program_text},
+                    set(record.signatures),
+                )
+            else:
+                existing_entry, indexes, support_task_ids, support_program_texts, sigs = existing
+                indexes.add(prog_idx)
+                support_task_ids.update(record.task_ids)
+                support_program_texts.add(record.program_text)
+                sigs.update(record.signatures)
+                aggregates[key] = (
+                    existing_entry,
+                    indexes,
+                    support_task_ids,
+                    support_program_texts,
+                    sigs,
+                )
+
+    ranked: list[CandidateAggregate] = []
+    for key, (entry, program_indexes, support_task_ids, support_program_texts, sigs) in aggregates.items():
+        candidate = LibraryEntry(
+            name=_stable_name(entry, key),
+            params=entry.params,
+            return_type=entry.return_type,
+            steps=entry.steps,
+            output=entry.output,
+            level=1,
+            use_count=max(len(support_task_ids), len(program_indexes)),
+            support_task_ids=tuple(sorted(support_task_ids)),
+            support_program_count=len(support_program_texts),
+            signatures=tuple(sorted(sigs)),
+        )
+        ranked.append(CandidateAggregate(
+            entry=candidate,
+            program_indexes=frozenset(program_indexes),
+            support_task_ids=frozenset(support_task_ids),
+            support_program_texts=frozenset(support_program_texts),
+            mdl_gain=mdl_improvement(weighted_programs, candidate),
+        ))
+
+    return _admit_ranked_candidates(
+        weighted_programs,
+        ranked,
         min_uses=min_uses,
         max_entries=max_entries,
+        corpus_tasks=len({
+            task_id
+            for record in program_store.all_records()
+            for task_id in record.task_ids
+        }),
+        candidates_mined=candidates_mined,
     )
 
 
@@ -107,9 +190,29 @@ def build_library(
         ranked.append(CandidateAggregate(
             entry=candidate,
             program_indexes=frozenset(program_indexes),
+            support_task_ids=frozenset(),
+            support_program_texts=frozenset(),
             mdl_gain=mdl_improvement(programs, candidate),
         ))
+    return _admit_ranked_candidates(
+        programs,
+        ranked,
+        min_uses=min_uses,
+        max_entries=max_entries,
+        corpus_tasks=0,
+        candidates_mined=candidates_mined,
+    )
 
+
+def _admit_ranked_candidates(
+    programs: list[Program],
+    ranked: list[CandidateAggregate],
+    *,
+    min_uses: int,
+    max_entries: int,
+    corpus_tasks: int,
+    candidates_mined: int,
+) -> tuple[Library, LibraryBuildReport]:
     ranked.sort(
         key=lambda aggregate: (
             -aggregate.entry.use_count,
@@ -131,8 +234,25 @@ def build_library(
             min_uses=min_uses,
         )
         if admitted:
-            library.add(aggregate.entry)
-            admitted_entries.append(aggregate.entry)
+            entry = LibraryEntry(
+                name=aggregate.entry.name,
+                params=aggregate.entry.params,
+                return_type=aggregate.entry.return_type,
+                steps=aggregate.entry.steps,
+                output=aggregate.entry.output,
+                level=aggregate.entry.level,
+                use_count=aggregate.entry.use_count,
+                support_task_ids=tuple(sorted(aggregate.support_task_ids)),
+                support_program_count=(
+                    len(aggregate.support_program_texts)
+                    if aggregate.support_program_texts
+                    else len(aggregate.program_indexes)
+                ),
+                mdl_gain=aggregate.mdl_gain,
+                signatures=aggregate.entry.signatures,
+            )
+            library.add(entry)
+            admitted_entries.append(entry)
             if max_entries and len(admitted_entries) >= max_entries:
                 break
         else:
@@ -140,6 +260,7 @@ def build_library(
 
     report = LibraryBuildReport(
         corpus_programs=len(programs),
+        corpus_tasks=corpus_tasks,
         candidates_mined=candidates_mined,
         aggregated_candidates=len(ranked),
         admitted_entries=tuple(admitted_entries),

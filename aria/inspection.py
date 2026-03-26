@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from aria.local_policy import LocalPolicy
 
 import aria.runtime  # noqa: F401
 from aria.graph.extract import extract, extract_with_delta
 from aria.graph.signatures import compute_task_signatures
 from aria.library.store import Library
-from aria.offline_search import SearchTraceEntry, search_program
 from aria.program_store import ProgramStore
 from aria.proposer.parser import ParseError, parse_program
+from aria.refinement import run_refinement_loop
+from aria.reporting import extract_op_names
 from aria.runtime.ops import get_op
 from aria.runtime.program import program_to_text
 from aria.runtime.type_system import type_check
@@ -29,6 +33,9 @@ class RetrievalInspection:
     signature_overlap: int
     matching_signatures: tuple[str, ...]
     status: str
+    distinct_task_count: int = 0
+    has_non_retrieval_source: bool = False
+    retrieval_echo_count: int = 0
     failed_demo: int | None = None
     error_type: str | None = None
     program_text: str = ""
@@ -43,8 +50,12 @@ def inspect_task(
     retrieval_limit: int = 10,
     max_search_steps: int = 3,
     max_search_candidates: int = 200,
+    max_refinement_rounds: int = 2,
     search_trace_limit: int = 20,
     include_core_ops: bool = True,
+    beam_width: int = 0,
+    beam_rounds: int = 3,
+    local_policy: LocalPolicy | None = None,
 ) -> dict[str, Any]:
     """Collect a human/debug-friendly snapshot of task processing."""
     task_signatures = compute_task_signatures(demos)
@@ -64,38 +75,117 @@ def inspect_task(
         limit=retrieval_limit,
     )
 
-    traces: list[SearchTraceEntry] = []
-
-    def observer(entry: SearchTraceEntry) -> None:
-        if len(traces) < search_trace_limit:
-            traces.append(entry)
-
-    search_result = search_program(
+    refinement_result = run_refinement_loop(
         demos,
         library,
         program_store=program_store,
         max_steps=max_search_steps,
         max_candidates=max_search_candidates,
+        max_rounds=max_refinement_rounds,
         include_core_ops=include_core_ops,
-        observer=observer,
+        beam_width=beam_width,
+        beam_rounds=beam_rounds,
+        local_policy=local_policy,
     )
 
-    return {
+    refinement_data: dict[str, Any] = {
+        "solved": refinement_result.solved,
+        "candidates_tried": refinement_result.candidates_tried,
+        "winning_program": (
+            program_to_text(refinement_result.winning_program)
+            if refinement_result.winning_program is not None
+            else None
+        ),
+        "rounds": [
+            {
+                "round_idx": round_idx,
+                "plan": {
+                    "name": round_result.plan.name,
+                    "max_steps": round_result.plan.max_steps,
+                    "max_candidates": round_result.plan.max_candidates,
+                    "allowed_ops": sorted(round_result.plan.allowed_ops or ()),
+                },
+                "policy_source": round_result.policy_source,
+                "solved": round_result.solved,
+                "candidates_tried": round_result.candidates_tried,
+                "feedback": asdict(round_result.feedback),
+                "best_candidate_program": _best_candidate_program_text(round_result),
+                "winning_program": (
+                    program_to_text(round_result.winning_program)
+                    if round_result.winning_program is not None
+                    else None
+                ),
+                "trace": [asdict(entry) for entry in round_result.trace[:search_trace_limit]],
+            }
+            for round_idx, round_result in enumerate(refinement_result.rounds)
+        ],
+    }
+
+    if refinement_result.beam is not None:
+        beam = refinement_result.beam
+        refinement_data["beam"] = {
+            "solved": beam.solved,
+            "candidates_scored": beam.candidates_scored,
+            "rounds_completed": beam.rounds_completed,
+            "best_score": beam.best_score,
+            "best_program_text": beam.best_program_text,
+            "round_summaries": [asdict(rs) for rs in beam.round_summaries],
+            "top_improvements": [
+                asdict(t) for t in beam.transitions if t.improved
+            ][:search_trace_limit],
+        }
+
+    # Abstraction retrieval diagnostics
+    hints = refinement_result.abstraction_hints
+    hint_names = frozenset(h.name for h in hints)
+    winning_text = (
+        program_to_text(refinement_result.winning_program)
+        if refinement_result.winning_program is not None
+        else ""
+    )
+    winning_ops = extract_op_names(winning_text) if winning_text else set()
+    used_hints = sorted(hint_names & winning_ops)
+
+    abstraction_retrieval: dict[str, Any] = {
+        "hints": [h.to_dict() for h in hints],
+        "hint_count": len(hints),
+        "used_in_winning_program": used_hints,
+        "solved_with_retrieved_abstraction": bool(
+            refinement_result.solved and used_hints
+        ),
+    }
+
+    # Skeleton hypothesis results
+    sr = refinement_result.skeleton_result
+    if sr is not None:
+        abstraction_retrieval["skeleton_hypotheses"] = {
+            "solved": sr.solved,
+            "skeletons_tested": sr.skeletons_tested,
+            "skeletons_generated": sr.skeletons_generated,
+            "hypotheses": [
+                {
+                    "program_text": h.program_text,
+                    "passed": h.passed,
+                    "source": h.source,
+                    "error_type": h.error_type,
+                }
+                for h in sr.hypotheses[:search_trace_limit]
+            ],
+        }
+
+    result = {
         "task_signatures": sorted(task_signatures),
         "output_size": inspect_output_size(demos, test_inputs=test_inputs),
         "demos": demo_summaries,
         "retrieval": [asdict(item) for item in retrieval],
-        "search": {
-            "solved": search_result.solved,
-            "candidates_tried": search_result.candidates_tried,
-            "winning_program": (
-                program_to_text(search_result.winning_program)
-                if search_result.winning_program is not None
-                else None
-            ),
-            "trace": [asdict(entry) for entry in traces],
-        },
+        "abstraction_retrieval": abstraction_retrieval,
+        "refinement": refinement_data,
     }
+
+    if refinement_result.decomposition is not None:
+        result["decomposition"] = refinement_result.decomposition.to_dict()
+
+    return result
 
 
 def inspect_output_size(
@@ -158,21 +248,25 @@ def inspect_retrieval(
             break
 
         overlap = tuple(sorted(task_signatures & set(record.signatures)))
+        common = dict(
+            rank=rank,
+            task_ids=record.task_ids,
+            sources=record.sources,
+            use_count=record.use_count,
+            step_count=record.step_count,
+            signature_overlap=len(overlap),
+            matching_signatures=overlap,
+            distinct_task_count=record.distinct_task_count,
+            has_non_retrieval_source=record.has_non_retrieval_source,
+            retrieval_echo_count=record.retrieval_echo_count,
+            program_text=record.program_text,
+        )
 
         try:
             program = parse_program(record.program_text)
         except ParseError as exc:
             results.append(RetrievalInspection(
-                rank=rank,
-                task_ids=record.task_ids,
-                sources=record.sources,
-                use_count=record.use_count,
-                step_count=record.step_count,
-                signature_overlap=len(overlap),
-                matching_signatures=overlap,
-                status="parse_error",
-                error_type=str(exc),
-                program_text=record.program_text,
+                **common, status="parse_error", error_type=str(exc),
             ))
             continue
 
@@ -182,35 +276,29 @@ def inspect_retrieval(
         )
         if type_errors:
             results.append(RetrievalInspection(
-                rank=rank,
-                task_ids=record.task_ids,
-                sources=record.sources,
-                use_count=record.use_count,
-                step_count=record.step_count,
-                signature_overlap=len(overlap),
-                matching_signatures=overlap,
-                status="type_error",
-                error_type="; ".join(type_errors[:4]),
-                program_text=record.program_text,
+                **common, status="type_error", error_type="; ".join(type_errors[:4]),
             ))
             continue
 
         verify_result = verify(program, demos)
         results.append(RetrievalInspection(
-            rank=rank,
-            task_ids=record.task_ids,
-            sources=record.sources,
-            use_count=record.use_count,
-            step_count=record.step_count,
-            signature_overlap=len(overlap),
-            matching_signatures=overlap,
+            **common,
             status="pass" if verify_result.passed else "verify_fail",
             failed_demo=verify_result.failed_demo,
             error_type=verify_result.error_type,
-            program_text=record.program_text,
         ))
 
     return results
+
+
+def _best_candidate_program_text(round_result) -> str | None:
+    candidate_num = round_result.feedback.best_candidate_num
+    if candidate_num is None:
+        return None
+    for entry in round_result.trace:
+        if entry.candidate_num == candidate_num:
+            return entry.program_text
+    return None
 
 
 def summarize_state_graph(state_graph: StateGraph) -> dict[str, Any]:

@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from aria.graph.signatures import compute_task_signatures
-from aria.library.admission import check_admission
-from aria.library.mining import mine_abstractions
 from aria.library.store import Library
-from aria.offline_search import search_program
 from aria.program_store import ProgramStore
+from aria.refinement import RefinementResult, run_refinement_loop
 from aria.retrieval import retrieve_program
 from aria.types import DemoPair, Grid, Program, Task, TaskContext, VerifyMode
 from aria.verify.mode import detect_mode
+
+if TYPE_CHECKING:
+    from aria.local_policy import LocalPolicy
 
 
 @dataclass
@@ -25,9 +26,12 @@ class SolveResult:
     abstractions_mined: int
     retrieved: bool = False
     searched: bool = False
+    refined: bool = False
     retrieval_candidates_tried: int = 0
     search_candidates_tried: int = 0
+    refinement_rounds: int = 0
     task_signatures: tuple[str, ...] = ()
+    refinement_result: RefinementResult | None = None
 
 
 def solve_task(
@@ -39,7 +43,12 @@ def solve_task(
     retrieval_limit: int = 0,
     max_search_steps: int = 3,
     max_search_candidates: int = 5000,
+    max_refinement_rounds: int = 2,
     include_core_ops: bool = True,
+    beam_width: int = 0,
+    beam_rounds: int = 3,
+    beam_mutations_per_candidate: int = 30,
+    local_policy: LocalPolicy | None = None,
 ) -> SolveResult:
     """Solve a single ARC task without any proposer model."""
     task_signatures = tuple(sorted(compute_task_signatures(task.train)))
@@ -73,16 +82,21 @@ def solve_task(
             task_signatures=task_signatures,
         )
 
-    search_result = search_program(
+    refinement_result = run_refinement_loop(
         task.train,
         library,
         program_store=program_store,
         max_steps=max_search_steps,
         max_candidates=max_search_candidates,
+        max_rounds=max_refinement_rounds,
         include_core_ops=include_core_ops,
+        local_policy=local_policy,
+        beam_width=beam_width,
+        beam_rounds=beam_rounds,
+        beam_mutations_per_candidate=beam_mutations_per_candidate,
     )
 
-    if not search_result.solved or search_result.winning_program is None:
+    if not refinement_result.solved or refinement_result.winning_program is None:
         return SolveResult(
             task_id=task_id,
             solved=False,
@@ -90,11 +104,14 @@ def solve_task(
             winning_program=None,
             abstractions_mined=0,
             searched=True,
-            search_candidates_tried=search_result.candidates_tried,
+            refined=max_refinement_rounds > 1,
+            search_candidates_tried=refinement_result.candidates_tried,
+            refinement_rounds=len(refinement_result.rounds),
             task_signatures=task_signatures,
+            refinement_result=refinement_result,
         )
 
-    program = search_result.winning_program
+    program = refinement_result.winning_program
     test_outputs = _execute_on_test(task, program)
     if program_store is not None:
         program_store.add_program(
@@ -104,28 +121,18 @@ def solve_task(
             signatures=frozenset(task_signatures),
         )
 
-    mined = mine_abstractions([program])
-    abstractions_admitted = 0
-    for candidate in mined:
-        admitted, _reason = check_admission(
-            candidate,
-            [program],
-            library,
-            min_uses=1,
-        )
-        if admitted:
-            library.add(candidate)
-            abstractions_admitted += 1
-
     return SolveResult(
         task_id=task_id,
         solved=True,
         test_outputs=test_outputs,
         winning_program=program,
-        abstractions_mined=abstractions_admitted,
+        abstractions_mined=0,
         searched=True,
-        search_candidates_tried=search_result.candidates_tried,
+        refined=max_refinement_rounds > 1,
+        search_candidates_tried=refinement_result.candidates_tried,
+        refinement_rounds=len(refinement_result.rounds),
         task_signatures=task_signatures,
+        refinement_result=refinement_result,
     )
 
 

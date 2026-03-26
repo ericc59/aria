@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 
-from aria.library.builder import build_library
+from aria.library.builder import build_library, build_library_from_store
+from aria.library.graph import build_abstraction_graph
 from aria.program_store import ProgramStore
 from aria.proposer.parser import parse_program
 from aria.snapshot import write_snapshot
@@ -61,3 +62,49 @@ yield result
     assert manifest["metadata"]["benchmark"] == "arc"
     assert (manifest_path.parent / "program_store.json").exists()
     assert (manifest_path.parent / "library.json").exists()
+
+
+def test_build_library_from_store_counts_distinct_task_reuse():
+    store = ProgramStore()
+    program_text = """\
+bind flipped: GRID = reflect_grid(HORIZONTAL, input)
+bind tiled: GRID = stack_v(input, flipped)
+bind result: GRID = transpose_grid(tiled)
+yield result
+"""
+    store.add_text(program_text, task_id="task-a", source="offline-search")
+    store.add_text(program_text, task_id="task-b", source="offline-search")
+
+    library, report = build_library_from_store(store, min_length=2, max_length=2, min_uses=2)
+
+    assert report.corpus_programs == 2
+    assert report.corpus_tasks == 2
+    assert len(library.all_entries()) >= 1
+    entry = library.all_entries()[0]
+    assert entry.use_count == 2
+    assert entry.support_task_ids == ("task-a", "task-b")
+    assert entry.support_program_count == 1
+    assert entry.mdl_gain > 0
+
+
+def test_build_abstraction_graph_links_abstractions_to_supporting_leaves():
+    store = ProgramStore()
+    program_text = """\
+bind flipped: GRID = reflect_grid(HORIZONTAL, input)
+bind tiled: GRID = stack_v(input, flipped)
+bind result: GRID = transpose_grid(tiled)
+yield result
+"""
+    store.add_text(program_text, task_id="task-a", source="offline-search")
+    store.add_text(program_text, task_id="task-b", source="offline-search")
+
+    library, _report = build_library_from_store(store, min_length=2, max_length=2, min_uses=2)
+    graph = build_abstraction_graph(store, library)
+
+    assert len(graph.leaves) == 1
+    assert len(graph.abstractions) >= 1
+    abstraction = graph.abstractions[0]
+    assert abstraction.support_task_ids == ("task-a", "task-b")
+    assert len(graph.edges) == 1
+    assert graph.edges[0].src == abstraction.id
+    assert graph.edges[0].dst == graph.leaves[0].id

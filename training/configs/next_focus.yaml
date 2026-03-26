@@ -1,0 +1,39 @@
+# NEXT_FOCUS — predict which refinement focus to try next.
+#
+# This is the simplest and highest-leverage task to train first:
+# the input is compact (signatures + feedback summary) and the output
+# is a short label (marker_geometry, size, color_map, generic).
+# Replacing the hand-built HeuristicRefinementPolicy with a learned
+# model here directly improves search efficiency.
+#
+# The prompt includes rich diff-scored fields when available:
+#   best_candidate_score, best_candidate_pixel_diff_count, etc.
+# Falls back gracefully to legacy verifier_feedback dict.
+
+base_model: "Qwen/Qwen2.5-3B"
+use_4bit: false
+
+data_path: "traces/training_export.jsonl"
+data_format: "jsonl"
+task_types:
+  - "NEXT_FOCUS"
+max_seq_len: 512
+val_split: 0.1
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - "q_proj"
+  - "v_proj"
+
+output_dir: "checkpoints/next_focus"
+epochs: 5
+batch_size: 8
+gradient_accumulation_steps: 2
+learning_rate: 2e-4
+warmup_ratio: 0.03
+weight_decay: 0.01
+logging_steps: 10
+save_steps: 200
+bf16: true

@@ -134,7 +134,7 @@ def traced_execute(
     return result, tuple(entries)
 
 
-def compute_diff(actual: Grid, expected: Grid) -> dict[str, Any]:
+def compute_diff(actual: Grid, expected: Grid, input_grid: Grid | None = None) -> dict[str, Any]:
     """Compute a structured diff between actual and expected grids."""
     diff: dict[str, Any] = {
         "expected_dims": (expected.shape[0], expected.shape[1]),
@@ -151,9 +151,50 @@ def compute_diff(actual: Grid, expected: Grid) -> dict[str, Any]:
 
     # Summarize which rows/cols are wrong
     wrong_rows = [int(r) for r in range(mismatch.shape[0]) if mismatch[r].any()]
+    wrong_cols = [int(c) for c in range(mismatch.shape[1]) if mismatch[:, c].any()]
+    diff["wrong_rows"] = wrong_rows
+    diff["wrong_cols"] = wrong_cols
     if wrong_rows:
         diff["pixel_diff_summary"] = f"wrong rows: {wrong_rows}"
     else:
         diff["pixel_diff_summary"] = "identical"
+
+    expected_palette = {int(value) for value in np.unique(expected)}
+    actual_palette = {int(value) for value in np.unique(actual)}
+    palette_overlap = actual_palette & expected_palette
+    diff["expected_palette"] = sorted(expected_palette)
+    diff["actual_palette"] = sorted(actual_palette)
+    diff["palette_missing"] = sorted(expected_palette - actual_palette)
+    diff["palette_extra"] = sorted(actual_palette - expected_palette)
+    diff["palette_expected_coverage"] = (
+        len(palette_overlap) / len(expected_palette)
+        if expected_palette
+        else 1.0
+    )
+    diff["palette_precision"] = (
+        len(palette_overlap) / len(actual_palette)
+        if actual_palette
+        else 1.0
+    )
+
+    if input_grid is not None and input_grid.shape == expected.shape:
+        preserved_mask = expected == input_grid
+        changed_mask = expected != input_grid
+        preserved_total = int(np.sum(preserved_mask))
+        changed_total = int(np.sum(changed_mask))
+        diff["preserved_input_cells_total"] = preserved_total
+        diff["preserved_input_cells_correct"] = int(np.sum(actual[preserved_mask] == input_grid[preserved_mask]))
+        diff["changed_cells_total"] = changed_total
+        diff["changed_cells_correct"] = int(np.sum(actual[changed_mask] == expected[changed_mask]))
+        diff["preserved_input_ratio"] = (
+            diff["preserved_input_cells_correct"] / preserved_total
+            if preserved_total
+            else None
+        )
+        diff["changed_cells_ratio"] = (
+            diff["changed_cells_correct"] / changed_total
+            if changed_total
+            else None
+        )
 
     return diff

@@ -1,0 +1,44 @@
+# NEXT_EDIT — predict the next program edit given before/after programs + feedback.
+#
+# Train after NEXT_FOCUS. Schema v2 provides strong and medium quality
+# examples with explicit before/after programs, scores, and diff feedback.
+# Weak examples (coarse round transitions) are excluded by default.
+#
+# Quality tiers:
+#   strong  — best failing candidate from prior round -> exact winner this round
+#   medium  — best candidate improved across rounds (no exact solve)
+#   weak    — coarse round transition, no before_program anchor
+#
+# Set next_edit_min_quality to control which tiers are included:
+#   "strong"  — only exact-solve transitions
+#   "medium"  — strong + improvement transitions (recommended default)
+#   "weak"    — include all, even coarse
+
+base_model: "Qwen/Qwen2.5-3B"
+use_4bit: false
+
+data_path: "traces/training_export.jsonl"
+data_format: "jsonl"
+task_types:
+  - "NEXT_EDIT"
+max_seq_len: 1024
+val_split: 0.1
+next_edit_min_quality: "medium"
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - "q_proj"
+  - "v_proj"
+
+output_dir: "checkpoints/next_edit"
+epochs: 3
+batch_size: 4
+gradient_accumulation_steps: 4
+learning_rate: 2e-4
+warmup_ratio: 0.03
+weight_decay: 0.01
+logging_steps: 10
+save_steps: 200
+bf16: true

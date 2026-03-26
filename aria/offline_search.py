@@ -57,6 +57,8 @@ class SearchTraceEntry:
     failed_demo: int | None = None
     error_type: str | None = None
     diff: dict[str, Any] | None = None
+    score: float | None = None
+    score_reasons: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -80,17 +82,21 @@ def search_program(
     max_steps: int = 3,
     max_candidates: int = 5000,
     include_core_ops: bool = True,
+    allowed_ops: frozenset[str] | None = None,
+    preferred_ops: frozenset[str] | None = None,
+    excluded_ops: frozenset[str] | None = None,
+    depth_preferred_fn: Callable[[int, int], frozenset[str]] | None = None,
     observer: Callable[[SearchTraceEntry], None] | None = None,
 ) -> SearchResult:
-    """Enumerate short typed programs using core ops and library entries."""
+    """Enumerate short typed programs using core ops and library entries.
+
+    *preferred_ops*: op names that get a ranking boost at every depth.
+    *excluded_ops*: op names to hard-exclude from the search space.
+    *depth_preferred_fn*: callable(depth, max_steps) → frozenset[str]
+        returning per-depth preferred ops (from decomposition sub-goals).
+    """
     task_signatures = compute_task_signatures(demos)
     literal_pool = _build_literal_pool(demos)
-    op_signatures = _ranked_op_signatures(
-        library,
-        program_store,
-        include_core_ops=include_core_ops,
-        task_signatures=task_signatures,
-    )
 
     candidates_tried = 0
     seen_programs: set[str] = set()
@@ -98,6 +104,21 @@ def search_program(
     frontier = [_State(steps=(), bindings=())]
 
     for depth in range(1, max_steps + 1):
+        # Compute per-depth preferred ops by merging global + depth-specific
+        depth_preferred = preferred_ops or frozenset()
+        if depth_preferred_fn is not None:
+            depth_preferred = depth_preferred | depth_preferred_fn(depth, max_steps)
+
+        op_signatures = _ranked_op_signatures(
+            library,
+            program_store,
+            include_core_ops=include_core_ops,
+            task_signatures=task_signatures,
+            allowed_ops=allowed_ops,
+            preferred_ops=depth_preferred,
+            excluded_ops=excluded_ops,
+        )
+
         frontier_budget = _depth_frontier_budget(
             depth=depth,
             max_steps=max_steps,
@@ -390,9 +411,14 @@ def _ranked_op_signatures(
     *,
     include_core_ops: bool,
     task_signatures: frozenset[str],
+    allowed_ops: frozenset[str] | None = None,
+    preferred_ops: frozenset[str] | None = None,
+    excluded_ops: frozenset[str] | None = None,
 ) -> list[tuple[str, OpSignature]]:
     library_scores = {entry.name: entry.use_count for entry in library.all_entries()}
     corpus_scores = Counter()
+    preferred = preferred_ops or frozenset()
+    excluded = excluded_ops or frozenset()
 
     if program_store is not None:
         for record in program_store.ranked_records():
@@ -401,6 +427,10 @@ def _ranked_op_signatures(
 
     ranked: list[tuple[str, OpSignature]] = []
     for name, sig in all_ops().items():
+        if name in excluded:
+            continue
+        if allowed_ops is not None and name not in allowed_ops:
+            continue
         if not include_core_ops and name not in library_scores:
             continue
         if not _is_searchable_sig(sig):
@@ -409,6 +439,7 @@ def _ranked_op_signatures(
 
     ranked.sort(
         key=lambda item: (
+            -(30 if item[0] in preferred else 0),
             -_signature_bonus(item[0], task_signatures),
             -corpus_scores.get(item[0], 0),
             len(item[1].params),
@@ -469,6 +500,35 @@ def _dedupe_preserve_order(values: Iterable[int]) -> list[int]:
         seen.add(value)
         ordered.append(value)
     return ordered
+
+
+def excluded_ops_from_signatures(task_signatures: frozenset[str]) -> frozenset[str]:
+    """Derive hard op exclusions from task signatures.
+
+    This is the type-level constraint step: if signatures establish that
+    the task preserves dimensions, exclude ops that change dimensions, and
+    vice versa. This narrows the search space without losing correctness.
+    """
+    excluded: set[str] = set()
+
+    if "dims:same" in task_signatures:
+        # Same-size tasks: exclude ops that change grid dimensions
+        excluded.update({
+            "tile_grid", "upscale_grid", "scale_dims", "stack_h", "stack_v",
+            "embed",
+        })
+
+    if "dims:different" in task_signatures:
+        # Different-size tasks: exclude ops that only make sense for same-size
+        # (nothing to exclude here — different-size tasks need flexible ops)
+        pass
+
+    return frozenset(excluded)
+
+
+def build_literal_pool(demos: tuple[DemoPair, ...]) -> dict[Type, tuple[Literal, ...]]:
+    """Public access to the literal pool builder."""
+    return _build_literal_pool(demos)
 
 
 def _literals_for_param(
