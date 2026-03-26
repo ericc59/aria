@@ -1,0 +1,9 @@
+# LoRA/QLoRA fine-tuning dependencies (separate from core ARIA).
+# Install: pip install -r requirements-training.txt
+torch>=2.1
+transformers>=4.40
+peft>=0.11
+datasets>=2.19
+accelerate>=0.30
+bitsandbytes>=0.43        # 4-bit quantization (QLoRA)
+pyyaml>=6.0
