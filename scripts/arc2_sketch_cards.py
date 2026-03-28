@@ -441,17 +441,25 @@ def _infer_system_failure(
             "structural roles to colors that change between demos"
         )
 
+    rule_kinds = Counter(r.kind for r in obs_result.rules)
+
     if not obs_result.rules:
-        parts.append("observation module found no rules — task doesn't match any known rule family")
+        parts.append(
+            f"observation module found 0 rules across {obs_result.candidates_tested} "
+            f"candidates — task doesn't match surround/recolor/move/remove/rigid_transform"
+        )
     elif not nonzero_moves and move_rules:
         parts.append(
-            "observation found move rules but all have zero delta — "
-            "objects stay put under the system's object model but something else changes"
+            f"observation found {len(move_rules)} move rules but all zero-delta — "
+            f"objects are stationary under the system's model but "
+            f"{pixel_diff['max_changed'] if pixel_diff else '?'} pixels actually change"
         )
     elif nonzero_moves and not obs_result.solved:
+        groupings = Counter(r.grouping_key for r in nonzero_moves)
         parts.append(
-            "observation found movement rules but couldn't build a verified program — "
-            "the movement may be conditional, role-dependent, or compositional"
+            f"observation found {len(nonzero_moves)} movement rules "
+            f"(groupings: {dict(groupings)}) but couldn't verify any — "
+            f"movement may be conditional on context the system doesn't model"
         )
 
     if dims_rel and not (dims_result and dims_result.solved):
@@ -485,51 +493,111 @@ def _infer_sketch(
     pixel_diff: dict | None,
     dims_rel: dict | None,
     spatial: dict,
+    sigs: frozenset[str],
 ) -> str:
-    """Propose a concrete sketch shape for a program that would solve this task."""
+    """Propose a concrete sketch shape for a program that would solve this task.
+
+    Incorporates task-specific numbers: object counts, color values,
+    grid dimensions, changed pixel counts, transition types.
+    """
     same_dims = all(d.input.shape == d.output.shape for d in demos)
     bg_rotates = len(set(cr["bg_in"] for cr in color_roles)) > 1
+    n_demos = len(demos)
 
     parts = []
+    step = 1
 
     if bg_rotates:
-        parts.append("1. identify_roles(input) → {bg, fg_colors, marker, frame}")
+        bg_vals = sorted(set(cr["bg_in"] for cr in color_roles))
+        parts.append(f"{step}. identify_roles(input) → {{bg, fg_colors, marker, frame}}")
+        parts.append(f"   // bg rotates across demos: {bg_vals}")
+        step += 1
 
     if spatial["has_frame"]:
-        parts.append(f"{'2' if bg_rotates else '1'}. extract_interior(input, frame_color={spatial['frame_color']}) → interior_grid")
+        parts.append(f"{step}. extract_interior(input, frame_color={spatial['frame_color']}) → interior")
+        step += 1
 
     if same_dims and pixel_diff:
         max_ch = pixel_diff["max_changed"]
-        if max_ch <= 10:
-            # Small change — need context-dependent pixel selection
-            parts.append("find_target_positions(grid, context_rule) → positions")
-            parts.append("for each position: compute_new_value(position, neighbors, global_context)")
-            parts.append("paint(grid, positions, new_values) → output")
-        else:
-            if obj_struct["any_singletons"]:
-                parts.append("find_objects(input) → objects")
-                parts.append("identify_anchor(objects) → anchor")
-                parts.append("for each non-anchor object: compute_transform(object, anchor) → new_position/shape")
-                parts.append("paint_objects(transformed, canvas) → output")
+        d0 = pixel_diff["per_demo"][0]
+        rows_hit = d0["changed_rows"]
+        transitions = d0["value_transitions"]
+
+        if max_ch <= 5:
+            parts.append(f"{step}. // {max_ch} pixels change in demo 0, rows affected: {rows_hit}")
+            parts.append(f"   // transitions: {transitions}")
+            parts.append(f"   find_target_positions(grid, context_rule) → {max_ch} positions")
+            step += 1
+            parts.append(f"{step}. for each position: compute_new_value(pos, neighbors, global)")
+            step += 1
+        elif max_ch <= 30:
+            n_inp = obj_struct["per_demo"][0]["n_input_objects"]
+            n_out = obj_struct["per_demo"][0]["n_output_objects"]
+            parts.append(f"{step}. // {max_ch} pixels change; {n_inp} input objects, {n_out} output objects")
+            parts.append(f"   // transitions: {transitions}")
+
+            if obj_struct["any_singletons"] and "role:has_marker" in sigs:
+                parts.append(f"   find_objects(input) → {n_inp} objects")
+                step += 1
+                parts.append(f"{step}. identify_anchor(objects, criterion=singleton_of_unique_color)")
+                step += 1
+                parts.append(f"{step}. for each non-anchor: compute_transform(obj, anchor) → moved/recolored")
+                step += 1
             else:
-                parts.append("find_objects(input) → objects")
-                parts.append("for each object: apply_rule(object, context) → transformed_object")
-                parts.append("compose(transformed_objects, background) → output")
+                parts.append(f"   find_objects(input) → {n_inp} objects")
+                step += 1
+                parts.append(f"{step}. for each object: apply_contextual_rule(obj, grid_context)")
+                step += 1
+        else:
+            n_inp = obj_struct["per_demo"][0]["n_input_objects"]
+            n_out = obj_struct["per_demo"][0]["n_output_objects"]
+            if n_inp == n_out:
+                parts.append(f"{step}. // {max_ch}/{d0['total_pixels']} pixels change; object count preserved ({n_inp})")
+                parts.append(f"   find_objects(input) → {n_inp} objects")
+                step += 1
+                parts.append(f"{step}. for each object: transform(obj, grid_context) → new_obj")
+                step += 1
+            else:
+                parts.append(f"{step}. // {max_ch}/{d0['total_pixels']} pixels change; objects {n_inp}→{n_out}")
+                parts.append(f"   analyze structural correspondence input↔output")
+                step += 1
+                parts.append(f"{step}. reconstruct output from input structure + inferred rule")
+                step += 1
+
+        parts.append(f"{step}. paint(canvas, results) → output")
 
     elif dims_rel:
+        d0 = dims_rel["per_demo"][0]
+        in_s = d0["input_shape"]
+        out_s = d0["output_shape"]
+
         if dims_rel["all_shrink"]:
-            parts.append("identify_target_region(input) → bbox or mask")
-            parts.append("extract(input, region) → output")
+            if dims_rel["output_shape_fixed"]:
+                parts.append(f"{step}. // shrink: {in_s}→{out_s} (output shape fixed across {n_demos} demos)")
+                parts.append(f"   locate_target_region(input, selection_criterion) → bbox")
+                step += 1
+                parts.append(f"{step}. extract(input, bbox) → output {out_s}")
+            else:
+                parts.append(f"{step}. // shrink: {in_s}→{out_s} (output shape varies)")
+                parts.append(f"   infer_output_dims(input_structure) → (rows, cols)")
+                step += 1
+                parts.append(f"{step}. extract_or_reconstruct(input, dims, rule) → output")
         elif dims_rel["all_grow"]:
-            parts.append("compute_output_dims(input) → (rows, cols)")
-            parts.append("construct_canvas(dims) → blank")
-            parts.append("populate(blank, input_content, expansion_rule) → output")
+            parts.append(f"{step}. // grow: {in_s}→{out_s} (area ratio {d0['area_ratio']})")
+            parts.append(f"   compute_output_dims(input) → ({out_s[0]}, {out_s[1]})")
+            step += 1
+            parts.append(f"{step}. construct_canvas({out_s})")
+            step += 1
+            parts.append(f"{step}. populate(canvas, input_content, expansion_rule)")
         else:
-            parts.append("compute_output_dims(input) → (rows, cols)")
-            parts.append("transform_and_place(input, output_canvas) → output")
+            parts.append(f"{step}. // reshape: {in_s}→{out_s}")
+            parts.append(f"   compute_output_dims_and_layout(input)")
+            step += 1
+            parts.append(f"{step}. transform_and_place(input, output_canvas)")
 
     if not parts:
-        parts.append("// no clear sketch — requires manual task inspection")
+        n_inp = obj_struct["per_demo"][0]["n_input_objects"]
+        parts.append(f"// {n_inp} input objects, no clear sketch — manual inspection needed")
 
     return "\n".join(parts)
 
@@ -580,7 +648,7 @@ def build_card(task_id: str, task) -> SketchCard:
     construction = _infer_construction(demos, color_roles, obj_struct, pixel_diff, dims_rel, spatial)
     system_failure = _infer_system_failure(obs_result, dims_result, sigs, color_roles, pixel_diff, dims_rel)
     sketch = _infer_sketch(demos, decomposition, invariants, construction,
-                           color_roles, obj_struct, pixel_diff, dims_rel, spatial)
+                           color_roles, obj_struct, pixel_diff, dims_rel, spatial, sigs)
 
     # Summaries
     input_shapes = [d.input.shape for d in demos]

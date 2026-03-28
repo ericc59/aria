@@ -9,12 +9,16 @@ Implement sketch fitting for two high-value families:
 
 Why:
 We need to prove the sketch architecture can express task-local hypotheses that the old rule-family engine misses.
+These two families should explicitly exercise ARC-AGI-2 pressures:
+- framed periodic repair -> symbolic interpretation + compositional reasoning
+- composite role alignment -> symbolic interpretation + contextual rule application
 
 Hard constraints:
 - No task-specific hacks
 - No remote model calls
 - Fit sketches from demos; do not hardcode task IDs
 - Keep the first pass narrow
+- Keep fitting bounded; do not replace one fixed rule family with an expensive open search
 
 Write scope may include:
 - /Users/ericc59/Dev/aria/aria/sketch_fit.py (new)
@@ -31,9 +35,11 @@ Do not edit unless absolutely necessary:
 Implement:
 1. Fit a region_periodic_repair sketch from framed-region tasks like 135a2760.
 2. Fit a composite_role_alignment sketch from tasks like 581f7754.
-3. Emit structured evidence for why the sketch was proposed.
-4. Add tests with synthetic tasks and at least one real-task regression harness if already used in repo.
+3. In both cases, prefer role-normalized parameters over literal colors when possible.
+4. Emit structured evidence for why the sketch was proposed.
+5. Add tests with synthetic tasks and at least one real-task regression harness if already used in repo.
 
 Success:
 - the system can propose sketches the old move/recolor/surround families could not express
 - proposed sketches are task-local and evidence-backed
+- the fitted sketches directly target ARC-AGI-2 symbolic/compositional/contextual failure modes

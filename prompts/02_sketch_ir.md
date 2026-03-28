@@ -12,12 +12,18 @@ We need an intermediate representation that can express task-local hypotheses li
 - align composite centers to anchor axis
 - construct output by packing objects under ordering O
 - expand each source cell into motif M
+This IR should explicitly support ARC-AGI-2's published demands:
+- symbolic interpretation: colors/markers/shapes can be role variables, not literals
+- compositional reasoning: multiple interacting subrules in one sketch
+- contextual rule application: transforms gated by local role or relation
+- efficiency: propose compact sketches before broad search
 
 Hard constraints:
 - No task-specific hacks
 - No remote model calls
 - Keep the IR small and typed
 - Do not replace Program or executor
+- Do not turn this into an open-ended unconstrained search IR
 
 Write scope may include:
 - /Users/ericc59/Dev/aria/aria/types.py
@@ -35,6 +41,7 @@ Implement:
    - primitive family
    - parameter slots
    - constraints
+   - role variables / symbolic bindings where needed
    - optional confidence/evidence
 2. Add a small set of first primitives:
    - region_periodic_repair
@@ -47,3 +54,4 @@ Implement:
 Success:
 - task-local hypotheses can be represented without committing to a full program
 - the IR is small, typed, and executable-compiler-friendly
+- the IR can express symbolic, compositional, and contextual hypotheses without literal-color overcommitment

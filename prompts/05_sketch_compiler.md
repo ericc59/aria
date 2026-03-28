@@ -7,12 +7,18 @@ Compile sketches into executable Programs.
 
 Why:
 A sketch is only useful if it becomes an executable candidate that the exact verifier can test.
+The compiler should preserve the advantages ARC-AGI-2 demands:
+- symbolic role bindings compile to concrete executable logic
+- compositional sketches compile without flattening away interactions
+- contextual guards survive compilation
+- execution stays efficient and bounded
 
 Hard constraints:
 - No task-specific hacks
 - No remote model calls
 - Keep Program/executor as the execution target
 - If a sketch cannot yet compile cleanly, fail explicitly rather than emitting fake programs
+- Prefer compact compiled programs over brute-force expanded ones
 
 Write scope may include:
 - /Users/ericc59/Dev/aria/aria/sketch_compile.py (new)
@@ -37,3 +43,4 @@ Success:
 - sketch -> Program is a real path
 - compile failures are inspectable
 - verifier can now score sketch-derived candidates
+- compiled candidates preserve symbolic/compositional/contextual intent instead of collapsing back to literal template hacks

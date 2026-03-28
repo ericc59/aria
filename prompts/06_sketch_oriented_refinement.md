@@ -19,12 +19,18 @@ We want:
 - compile candidates
 - verify
 - refine sketch parameters / edits
+This should align refinement with ARC-AGI-2:
+- symbolic interpretation before literal commitment
+- compositional reasoning before single-rule matching
+- contextual rule application before global transforms
+- efficiency before brute-force candidate growth
 
 Hard constraints:
 - No task-specific hacks
 - No remote model calls
 - Preserve exact verification semantics
 - Keep existing behavior as fallback until the new path is proven
+- Add bounded proposal budgets and report them; do not hide cost growth
 
 Write scope may include:
 - /Users/ericc59/Dev/aria/aria/refinement.py
@@ -41,13 +47,16 @@ Implement:
 1. Add a sketch-oriented refinement branch before legacy structural edits.
 2. Keep legacy path as fallback.
 3. Report:
-   - sketchs_proposed
+   - sketches_proposed
    - sketch_family
    - sketch_compiled
    - sketch_compile_failures
    - sketch_verified
+   - sketch_budget_used
+   - sketch_candidates_executed
 4. Add tests showing the new path can produce executable candidates and does not regress existing solve paths.
 
 Success:
 - refinement is no longer entirely phase-locked to old rule families
 - sketch-derived candidates become a first-class solve path
+- refinement becomes more ARC-AGI-2-aligned without degenerating into open-ended search

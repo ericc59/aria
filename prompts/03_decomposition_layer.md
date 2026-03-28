@@ -13,12 +13,16 @@ We need reusable decomposition views that sketches can consume:
 - composite motifs
 - row/column partitions
 - marker neighborhoods
+This is the first step toward ARC-AGI-2 symbolic interpretation:
+- decompose by role-bearing structure, not just literal colors
+- expose context needed for contextual rule application
 
 Hard constraints:
 - No task-specific hacks
 - No remote model calls
 - Keep decompositions explicit and inspectable
 - Do not add more bespoke _infer_X_rules as the main abstraction
+- Keep decomposition bounded and cheap enough to be used as a proposal stage, not an expensive full search
 
 Write scope may include:
 - /Users/ericc59/Dev/aria/aria/observe.py
@@ -39,10 +43,15 @@ Implement:
    - composites
    - marker neighborhoods
    - raw objects
-4. Keep existing observation behavior working, but route it through decomposition helpers where practical.
-5. Add tests for each decomposition view.
+4. Where useful, include role-oriented metadata that is color-invariant or color-light:
+   - enclosing shell vs center
+   - anchor-like singleton
+   - region interior vs frame
+5. Keep existing observation behavior working, but route it through decomposition helpers where practical.
+6. Add tests for each decomposition view.
 
 Success:
 - decomposition is a first-class layer
 - future sketch fitting can consume decompositions directly
 - observe.py becomes less monolithic
+- decompositions expose symbolic/contextual structure rather than only literal object blobs

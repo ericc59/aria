@@ -12,6 +12,11 @@ Create a per-task ARC-2 sketch-card corpus that describes each task individually
 
 Why:
 We do NOT want broad buckets used as solver design. We need task-specific sketch descriptions over shared primitives.
+The output should make ARC-AGI-2's core pressures explicit per task:
+- symbolic interpretation
+- compositional reasoning
+- contextual rule application
+- efficiency constraints
 
 Hard constraints:
 - No broad “bucket” labels as the main output
@@ -35,6 +40,7 @@ Implement:
 2. For each task, emit:
    - task_id
    - same_dims / dims_change
+   - ARC-2 pressure(s): symbolic / compositional / contextual / efficiency-sensitive
    - decomposition candidate(s)
    - observed invariant candidate(s)
    - output construction description
@@ -49,3 +55,4 @@ Success:
 - every ARC-2 eval task has an individual sketch card
 - cards are concrete enough to drive implementation prompts
 - no “one broad bucket = one module” framing
+- cards make the ARC-AGI-2 pressure(s) explicit without collapsing tasks into broad solver buckets

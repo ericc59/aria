@@ -16,3 +16,10 @@ These prompts are meant to move Aria from fixed rule-family matching toward:
 - shared decomposition primitives
 - sketch compilation to executable programs
 - optional learned proposal with exact symbolic verification
+
+They are also meant to align explicitly with ARC-AGI-2's published stressors:
+
+- symbolic interpretation
+- compositional reasoning
+- contextual rule application
+- efficiency over brute-force search
