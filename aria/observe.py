@@ -391,39 +391,16 @@ class _CorrespondenceResult:
 def _extract_objects_with_bg(grid: Grid) -> list[dict]:
     """Extract CC objects excluding the detected background color.
 
-    Unlike structural_edit._extract_foreground_objects which hardcodes
-    color 0 as background, this detects the most common color as bg.
+    Delegates to aria.decomposition.extract_objects for CC extraction,
+    then converts to legacy dict format for backward compatibility.
     """
-    from scipy import ndimage
+    from aria.decomposition import extract_objects, detect_bg
 
     if grid.size == 0:
         return []
-    unique, counts = np.unique(grid, return_counts=True)
-    bg_color = int(unique[np.argmax(counts)])
-
-    objects = []
-    for color in range(10):
-        if color == bg_color:
-            continue
-        binary = (grid == color).astype(np.uint8)
-        if not binary.any():
-            continue
-        labeled, n = ndimage.label(binary)
-        for label_id in range(1, n + 1):
-            ys, xs = np.where(labeled == label_id)
-            min_r, max_r = int(ys.min()), int(ys.max())
-            min_c, max_c = int(xs.min()), int(xs.max())
-            mask = labeled[min_r:max_r + 1, min_c:max_c + 1] == label_id
-            objects.append({
-                "color": color,
-                "row": min_r,
-                "col": min_c,
-                "size": int(mask.sum()),
-                "mask": mask,
-                "mask_bytes": mask.tobytes(),
-                "mask_shape": mask.shape,
-            })
-    return objects
+    bg_color = detect_bg(grid)
+    raw_objs = extract_objects(grid, bg_color)
+    return [o.to_dict() for o in raw_objs]
 
 
 def _correspondence_move_analysis(
