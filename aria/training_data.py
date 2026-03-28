@@ -16,7 +16,10 @@ from typing import Any
 
 SCHEMA_VERSION = 2
 
-TASK_TYPES = frozenset({"NEXT_FOCUS", "NEXT_EDIT", "SKETCH", "CANDIDATE_RANK"})
+TASK_TYPES = frozenset({
+    "NEXT_FOCUS", "NEXT_EDIT", "SKETCH", "CANDIDATE_RANK",
+    "DECOMP_RANK", "SKETCH_RANK",
+})
 
 # Diff-derived fields we propagate from feedback into training examples.
 _DIFF_PROGRESS_KEYS = (
@@ -443,6 +446,8 @@ _TARGET_REQUIRED: dict[str, set[str]] = {
     "NEXT_FOCUS": {"focus"},
     "NEXT_EDIT": {"after_program", "edit_quality"},
     "CANDIDATE_RANK": {"preferred", "rejected"},
+    "DECOMP_RANK": {"useful_views"},
+    "SKETCH_RANK": {"winning_family"},
 }
 
 

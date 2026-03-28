@@ -13,6 +13,13 @@ from aria.graph.signatures import compute_task_signatures
 from aria.library.store import Library
 from aria.decompose import DecompPlan, decompose_task
 from aria.explanation import RepairResult, attempt_program_repair, attempt_repair
+from aria.sketch_compile import (
+    CompileFailure,
+    CompilePerDemoPrograms,
+    CompileResult,
+    CompileTaskProgram,
+    compile_sketch,
+)
 from aria.structural_edit import EditResult, structural_edit_search
 from aria.hypotheses import SkeletonResult, check_skeleton_hypotheses
 from aria.observe import (
@@ -162,6 +169,29 @@ class BeamRefinementResult:
 
 
 @dataclass(frozen=True)
+class SketchRefinementResult:
+    """Outcome of the sketch-oriented refinement branch."""
+
+    sketches_proposed: int = 0
+    sketch_families: tuple[str, ...] = ()
+    sketch_compiled: int = 0
+    sketch_compile_failures: int = 0
+    sketch_verified: int = 0           # programs that passed verification
+    sketch_candidates_executed: int = 0
+    sketch_budget_used: int = 0        # total work units
+    solved: bool = False
+    winning_program: Program | None = None
+    winning_family: str | None = None
+    compile_results: tuple[CompileResult, ...] = ()
+    ranking_applied: bool = False
+    ranking_changed_order: bool = False
+    ranking_policy: str = "none"
+    decomp_ranking_applied: bool = False
+    decomp_ranking_changed_order: bool = False
+    decomp_ranking_policy: str = "none"
+
+
+@dataclass(frozen=True)
 class RefinementResult:
     solved: bool
     winning_program: Program | None
@@ -175,6 +205,7 @@ class RefinementResult:
     repair_result: RepairResult | None = None
     structural_edit_result: EditResult | None = None
     dims_reconstruction: DimsReconstructionResult | None = None
+    sketch_result: SketchRefinementResult | None = None
 
 
 class HeuristicRefinementPolicy:
@@ -369,6 +400,21 @@ def run_refinement_loop(
                 dims_reconstruction=dims_recon,
             )
 
+    # Phase 0d: sketch-oriented refinement — propose, compile, verify
+    sketch_result = _run_sketch_refinement(demos)
+    total_candidates += sketch_result.sketch_budget_used
+    if sketch_result.solved and sketch_result.winning_program is not None:
+        return RefinementResult(
+            solved=True,
+            winning_program=sketch_result.winning_program,
+            candidates_tried=total_candidates,
+            rounds=(),
+            decomposition=decomposition,
+            synthesis_result=synthesis_result,
+            dims_reconstruction=dims_recon,
+            sketch_result=sketch_result,
+        )
+
     # Retrieve strong abstractions as search guidance
     hints = tuple(retrieve_abstractions(demos, library))
     preferred = preferred_ops_from_hints(hints)
@@ -394,6 +440,7 @@ def run_refinement_loop(
             skeleton_result=skeleton_result,
             decomposition=decomposition,
             synthesis_result=synthesis_result,
+            sketch_result=sketch_result,
         )
 
     # Round 0: decomposition-constrained search
@@ -442,6 +489,7 @@ def run_refinement_loop(
                 skeleton_result=skeleton_result,
                 decomposition=decomposition,
                 synthesis_result=synthesis_result,
+                sketch_result=sketch_result,
             )
 
     for round_index in range(max_rounds):
@@ -520,6 +568,7 @@ def run_refinement_loop(
                 skeleton_result=skeleton_result,
                 decomposition=decomposition,
                 synthesis_result=synthesis_result,
+                sketch_result=sketch_result,
             )
 
     # Beam refinement phase
@@ -548,6 +597,7 @@ def run_refinement_loop(
                     skeleton_result=skeleton_result,
                     decomposition=decomposition,
                     synthesis_result=synthesis_result,
+                    sketch_result=sketch_result,
                 )
 
     # Explanation-driven repair phase: try to fix same-dims near-misses
@@ -572,6 +622,7 @@ def run_refinement_loop(
                     decomposition=decomposition,
                     synthesis_result=synthesis_result,
                     repair_result=repair_result,
+                    sketch_result=sketch_result,
                 )
 
         # Phase 2: grid-level repair (diagnostic, may not produce programs)
@@ -621,6 +672,7 @@ def run_refinement_loop(
                             decomposition=decomposition,
                             synthesis_result=synthesis_result,
                             repair_result=repair_result,
+                            sketch_result=sketch_result,
                         )
 
             # Phase 3b: structural edit search over near-miss programs
@@ -667,6 +719,7 @@ def run_refinement_loop(
                         synthesis_result=synthesis_result,
                         repair_result=repair_result,
                         structural_edit_result=edit_result,
+                        sketch_result=sketch_result,
                     )
 
             if grid_repair.solved:
@@ -681,6 +734,7 @@ def run_refinement_loop(
                     decomposition=decomposition,
                     synthesis_result=synthesis_result,
                     repair_result=repair_result,
+                    sketch_result=sketch_result,
                 )
 
     return RefinementResult(
@@ -695,6 +749,113 @@ def run_refinement_loop(
         synthesis_result=synthesis_result,
         repair_result=repair_result,
         dims_reconstruction=dims_recon,
+        sketch_result=sketch_result,
+    )
+
+
+def _run_sketch_refinement(
+    demos: tuple[DemoPair, ...],
+    *,
+    sketch_ranker=None,
+    decomp_ranker=None,
+    task_signatures: tuple[str, ...] = (),
+) -> SketchRefinementResult:
+    """Propose sketches (with optional decomp+sketch ranking), compile, verify.
+
+    Returns a SketchRefinementResult with diagnostics. Only marks
+    solved=True if a CompileTaskProgram passes verification across
+    all train demos. Per-demo specializations are recorded but not
+    promoted.
+    """
+    from aria.sketch_fit import fit_sketches_with_report
+    from aria.sketch_rank import RankingReport, rank_sketches
+    from aria.verify.verifier import verify
+
+    # Propose sketches with decomposition ranking
+    fit_result = fit_sketches_with_report(
+        demos, "",
+        decomp_ranker=decomp_ranker,
+        task_signatures=task_signatures,
+    )
+    sketches = fit_result.sketches
+    if not sketches:
+        return SketchRefinementResult(
+            sketches_proposed=0,
+            decomp_ranking_applied=fit_result.decomp_ranking_applied,
+            decomp_ranking_changed_order=fit_result.decomp_ranking_changed_order,
+            decomp_ranking_policy=fit_result.decomp_ranking_policy,
+        )
+
+    # Optionally rank sketches
+    same_dims = all(d.input.shape == d.output.shape for d in demos)
+    from aria.decomposition import detect_bg
+    bg_colors = [detect_bg(d.input) for d in demos]
+    bg_rotates = len(set(bg_colors)) > 1
+    demos_meta = {
+        "same_dims": same_dims,
+        "bg_rotates": bg_rotates,
+        "n_demos": len(demos),
+    }
+
+    sketches, rank_report = rank_sketches(
+        sketches,
+        task_signatures,
+        demos_meta,
+        ranker=sketch_ranker,
+    )
+
+    families = tuple(s.metadata.get("family", "unknown") for s in sketches)
+    compile_results: list[CompileResult] = []
+    compiled_count = 0
+    failure_count = 0
+    verified_count = 0
+    budget = 0
+
+    winning_program: Program | None = None
+    winning_family: str | None = None
+
+    for sketch in sketches:
+        result = compile_sketch(sketch, demos)
+        compile_results.append(result)
+        budget += 1
+
+        if isinstance(result, CompileTaskProgram):
+            compiled_count += 1
+            budget += 1
+            vr = verify(result.program, demos)
+            if vr.passed:
+                verified_count += 1
+                winning_program = result.program
+                winning_family = result.family
+                break
+        elif isinstance(result, CompilePerDemoPrograms):
+            compiled_count += 1
+            for prog, demo in zip(result.programs, demos):
+                budget += 1
+                vr = verify(prog, (demo,))
+                if vr.passed:
+                    verified_count += 1
+        elif isinstance(result, CompileFailure):
+            failure_count += 1
+
+    return SketchRefinementResult(
+        sketches_proposed=len(sketches),
+        sketch_families=families,
+        sketch_compiled=compiled_count,
+        sketch_compile_failures=failure_count,
+        sketch_verified=verified_count,
+        sketch_candidates_executed=budget,
+        sketch_budget_used=budget,
+        solved=winning_program is not None,
+        winning_program=winning_program,
+        winning_family=winning_family,
+        compile_results=tuple(compile_results),
+        ranking_applied=rank_report.order_changed or rank_report.policy_name != "none",
+        ranking_changed_order=rank_report.order_changed,
+        ranking_policy=rank_report.policy_name,
+        decomp_ranking_applied=fit_result.decomp_ranking_applied,
+        decomp_ranking_changed_order=fit_result.decomp_ranking_changed_order,
+        decomp_ranking_policy=fit_result.decomp_ranking_policy,
     )
 
 

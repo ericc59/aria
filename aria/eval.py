@@ -192,6 +192,8 @@ def evaluate_task(
             outcome["solve_phase"] = "direct_synthesis"
         elif rr.dims_reconstruction is not None and rr.dims_reconstruction.solved:
             outcome["solve_phase"] = "dims_reconstruction"
+        elif rr.sketch_result is not None and rr.sketch_result.solved:
+            outcome["solve_phase"] = "sketch"
         elif len(rr.rounds) == 0 and result.solved:
             # Solved before search rounds — observation or skeleton
             if rr.skeleton_result and rr.skeleton_result.solved:
@@ -221,6 +223,18 @@ def evaluate_task(
                 and len(rr.repair_result.repaired_targets) > 0
             )
             outcome["repair_has_executable_program"] = rr.repair_result.winning_program is not None
+
+        # Sketch refinement diagnostics
+        if rr.sketch_result is not None:
+            sr = rr.sketch_result
+            outcome["sketch_proposed"] = sr.sketches_proposed
+            outcome["sketch_families"] = list(sr.sketch_families)
+            outcome["sketch_compiled"] = sr.sketch_compiled
+            outcome["sketch_compile_failures"] = sr.sketch_compile_failures
+            outcome["sketch_verified"] = sr.sketch_verified
+            outcome["sketch_budget_used"] = sr.sketch_budget_used
+            if sr.winning_family:
+                outcome["sketch_winning_family"] = sr.winning_family
 
         # Structural edit diagnostics
         if rr.structural_edit_result is not None:
