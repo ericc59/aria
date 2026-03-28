@@ -11,6 +11,7 @@ from aria.local_policy import (
     LocalCausalLMPolicy,
     LocalPolicy,
     PolicyInput,
+    ProgramRanking,
     Sketch,
 )
 
@@ -143,3 +144,91 @@ class TestLocalCausalLMDryRun:
     def test_real_load_requires_transformers(self):
         with pytest.raises((ImportError, OSError)):
             LocalCausalLMPolicy(model_name_or_path="nonexistent", dry_run=False)
+
+
+# ---------------------------------------------------------------------------
+# rank_programs — interface contract
+# ---------------------------------------------------------------------------
+
+class TestRankProgramsContract:
+    """Test rank_programs on all policy implementations."""
+
+    @pytest.fixture(params=["heuristic", "local_lm_dry"])
+    def policy(self, request) -> LocalPolicy:
+        if request.param == "heuristic":
+            return HeuristicBaselinePolicy()
+        return LocalCausalLMPolicy(dry_run=True)
+
+    def test_returns_program_ranking(self, policy: LocalPolicy):
+        texts = ["let v0: Grid = identity(input)\noutput = v0", "prog2"]
+        result = policy.rank_programs(texts, _make_input())
+        assert isinstance(result, ProgramRanking)
+        assert len(result.indices) == 2
+        assert set(result.indices) == {0, 1}
+
+    def test_single_program_not_changed(self, policy: LocalPolicy):
+        result = policy.rank_programs(["prog"], _make_input())
+        assert result.indices == (0,)
+        assert result.changed is False
+
+    def test_empty_list(self, policy: LocalPolicy):
+        result = policy.rank_programs([], _make_input())
+        assert result.indices == ()
+        assert result.changed is False
+
+
+# ---------------------------------------------------------------------------
+# Heuristic rank_programs specifics
+# ---------------------------------------------------------------------------
+
+class TestHeuristicRankPrograms:
+
+    def test_shorter_programs_rank_first(self):
+        policy = HeuristicBaselinePolicy()
+        short = "let v0: Grid = identity(input)\noutput = v0"
+        long = (
+            "let v0: Grid = find_objects(input)\n"
+            "let v1: Grid = recolor(v0, 3)\n"
+            "let v2: Grid = overlay(v1, input)\n"
+            "output = v2"
+        )
+        result = policy.rank_programs([long, short], _make_input())
+        # Short program (1 step) should rank before long (3 steps)
+        assert result.indices[0] == 1
+        assert result.changed is True
+
+    def test_signature_bonus_ops_rank_higher(self):
+        policy = HeuristicBaselinePolicy()
+        generic = "let v0: Grid = identity(input)\noutput = v0"
+        color = "let v0: Grid = recolor(input, 3)\noutput = v0"
+        inp = _make_input(
+            task_signatures=("color:new_in_output", "dims:same"),
+        )
+        result = policy.rank_programs([generic, color], inp)
+        # Both are 1 step, but recolor has bonus for color task
+        assert result.indices[0] == 1
+        assert result.changed is True
+
+    def test_preserves_order_when_equal(self):
+        policy = HeuristicBaselinePolicy()
+        a = "let v0: Grid = identity(input)\noutput = v0"
+        b = "let v0: Grid = flip(input)\noutput = v0"
+        result = policy.rank_programs([a, b], _make_input())
+        # Both 1 step, no bonus, same score → preserve original order
+        assert result.indices == (0, 1)
+        assert result.changed is False
+
+    def test_policy_name_in_result(self):
+        policy = HeuristicBaselinePolicy()
+        result = policy.rank_programs(["prog"], _make_input())
+        assert result.policy_name == "heuristic"
+
+
+class TestLocalLMRankProgramsDryRun:
+
+    def test_preserves_order(self):
+        policy = LocalCausalLMPolicy(dry_run=True)
+        result = policy.rank_programs(["a", "b", "c"], _make_input())
+        assert result.indices == (0, 1, 2)
+        assert result.changed is False
+        assert result.policy_name == "local_lm_dry"

@@ -433,7 +433,7 @@ def _ranked_op_signatures(
             continue
         if not include_core_ops and name not in library_scores:
             continue
-        if not _is_searchable_sig(sig):
+        if not _is_searchable_sig(name, sig):
             continue
         ranked.append((name, sig))
 
@@ -451,15 +451,28 @@ def _ranked_op_signatures(
     return ranked
 
 
-def _is_searchable_sig(sig: OpSignature) -> bool:
+def _is_searchable_sig(name: str, sig: OpSignature) -> bool:
     if len(sig.params) == 0 or len(sig.params) > 3:
         return False
-    if sig.return_type in {Type.BOOL, Type.OBJ_TRANSFORM, Type.CALLABLE, Type.PAIR}:
+    if sig.return_type in {Type.BOOL, Type.CALLABLE, Type.PAIR}:
         return False
-    unsupported = {Type.OBJ_TRANSFORM, Type.CALLABLE}
+    # Higher-order return types (PREDICATE, OBJ_TRANSFORM) are allowed only
+    # for an explicit whitelist to keep the search space tightly bounded.
+    if sig.return_type in _SEARCHABLE_HIGHER_ORDER:
+        return name in _SEARCHABLE_HIGHER_ORDER[sig.return_type]
+    unsupported = {Type.CALLABLE}
     if any(param_type in unsupported for _, param_type in sig.params):
         return False
     return True
+
+
+# Explicit whitelist: only these ops may produce higher-order values during
+# search.  Every entry here adds O(literal_pool_size) states per depth, so
+# keep this set small and audit any additions.
+_SEARCHABLE_HIGHER_ORDER: dict[Type, frozenset[str]] = {
+    Type.PREDICATE: frozenset({"by_color", "by_size"}),
+    Type.OBJ_TRANSFORM: frozenset({"recolor_to", "translate_by"}),
+}
 
 
 def _build_literal_pool(demos: tuple[DemoPair, ...]) -> dict[Type, tuple[Literal, ...]]:
@@ -546,6 +559,8 @@ def _literals_for_param(
         values = [90, 180, 270]
     elif param_name in {"rows", "cols", "factor", "r", "c"}:
         values = [value for value in base_ints if 1 <= value <= 30]
+    elif param_name in {"dr", "dc"}:
+        values = [value for value in base_ints if -3 <= value <= 3]
     elif param_name in {"idx", "index", "rank"}:
         values = [value for value in base_ints if -1 <= value <= 4]
     else:

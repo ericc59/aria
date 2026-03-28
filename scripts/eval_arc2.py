@@ -261,6 +261,14 @@ def main() -> None:
             )
     print(f"Results: {results_file}")
 
+    # --- failure clusters ---
+    fc = report.get("failure_clusters", {})
+    clusters = fc.get("clusters", {})
+    if clusters:
+        print(f"Failure clusters ({fc.get('total_unsolved', 0)} unsolved):")
+        for name, info in clusters.items():
+            print(f"  {name}: {info['count']}")
+
     # --- gap diagnosis ---
     if "tasks" in report and report.get("total", 0) > 0:
         from aria.diagnosis import diagnose

@@ -31,6 +31,16 @@ def _replace_obj(obj: ObjectNode, **kwargs) -> ObjectNode:  # type: ignore[no-un
 # ---------------------------------------------------------------------------
 
 
+def _translate_delta(dr: int, dc: int, obj: ObjectNode) -> ObjectNode:
+    """Translate an object by arbitrary (dr, dc).
+
+    dr = row delta (positive = down), dc = col delta (positive = right).
+    Returns a new ObjectNode with updated bbox. The mask stays the same.
+    """
+    x, y, w, h = obj.bbox
+    return _replace_obj(obj, bbox=(x + dc, y + dr, w, h))
+
+
 def _translate(direction: Dir, amount: int, obj: ObjectNode) -> ObjectNode:
     """Translate an object by `amount` cells in the given direction.
 
@@ -171,6 +181,15 @@ def _extend(direction: Dir, amount: int, obj: ObjectNode) -> ObjectNode:
 # ---------------------------------------------------------------------------
 
 register(
+    "translate_delta",
+    OpSignature(
+        params=(("dr", Type.INT), ("dc", Type.INT), ("obj", Type.OBJECT)),
+        return_type=Type.OBJECT,
+    ),
+    _translate_delta,
+)
+
+register(
     "translate",
     OpSignature(
         params=(("dir", Type.DIR), ("amount", Type.INT), ("obj", Type.OBJECT)),
@@ -231,4 +250,58 @@ register(
         return_type=Type.OBJECT,
     ),
     _extend,
+)
+
+
+# ---------------------------------------------------------------------------
+# Anchor-aligned movement (OBJ_TRANSFORM factories)
+# ---------------------------------------------------------------------------
+
+
+def _align_center_to_row_of(anchor: ObjectNode) -> callable:
+    """Return a transform that moves obj so its bbox center row matches anchor's."""
+    target_row = anchor.bbox[1] + anchor.bbox[3] // 2
+
+    def transform(obj: ObjectNode) -> ObjectNode:
+        obj_center_row = obj.bbox[1] + obj.bbox[3] // 2
+        dr = target_row - obj_center_row
+        if dr == 0:
+            return obj
+        x, y, w, h = obj.bbox
+        return _replace_obj(obj, bbox=(x, y + dr, w, h))
+
+    return transform
+
+
+def _align_center_to_col_of(anchor: ObjectNode) -> callable:
+    """Return a transform that moves obj so its bbox center col matches anchor's."""
+    target_col = anchor.bbox[0] + anchor.bbox[2] // 2
+
+    def transform(obj: ObjectNode) -> ObjectNode:
+        obj_center_col = obj.bbox[0] + obj.bbox[2] // 2
+        dc = target_col - obj_center_col
+        if dc == 0:
+            return obj
+        x, y, w, h = obj.bbox
+        return _replace_obj(obj, bbox=(x + dc, y, w, h))
+
+    return transform
+
+
+register(
+    "align_center_to_row_of",
+    OpSignature(
+        params=(("anchor", Type.OBJECT),),
+        return_type=Type.OBJ_TRANSFORM,
+    ),
+    _align_center_to_row_of,
+)
+
+register(
+    "align_center_to_col_of",
+    OpSignature(
+        params=(("anchor", Type.OBJECT),),
+        return_type=Type.OBJ_TRANSFORM,
+    ),
+    _align_center_to_col_of,
 )

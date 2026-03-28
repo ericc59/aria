@@ -87,6 +87,29 @@ class LocalPolicy(abc.ABC):
         """Optionally emit a programme sketch.  Default: no sketch."""
         return None
 
+    def rank_programs(
+        self,
+        program_texts: Sequence[str],
+        inp: PolicyInput,
+    ) -> ProgramRanking:
+        """Reorder candidate programs by predicted quality.
+
+        Returns indices into ``program_texts`` in preferred order (best first).
+        Default: preserve original order.
+        """
+        return ProgramRanking(
+            indices=tuple(range(len(program_texts))),
+            changed=False,
+        )
+
+
+@dataclass(frozen=True)
+class ProgramRanking:
+    """Result of ranking a set of candidate programs."""
+    indices: tuple[int, ...]     # reordered indices into original list
+    changed: bool                # True if ranking differs from input order
+    policy_name: str = ""
+
 
 # ---------------------------------------------------------------------------
 # 1. Heuristic / mock baseline
@@ -131,6 +154,39 @@ class HeuristicBaselinePolicy(LocalPolicy):
     def rank_actions(self, inp: PolicyInput, candidates: Sequence[str]) -> ActionRanking:
         # Stable sort: keep original order (no learned signal).
         return ActionRanking(ranked_actions=tuple(candidates))
+
+    def rank_programs(
+        self,
+        program_texts: Sequence[str],
+        inp: PolicyInput,
+    ) -> ProgramRanking:
+        """Heuristic: rank programs by step count (shorter = more likely correct).
+
+        Tie-break: programs using ops that match task signatures rank higher.
+        """
+        if len(program_texts) <= 1:
+            return ProgramRanking(indices=(0,) if program_texts else (), changed=False,
+                                  policy_name="heuristic")
+
+        sigs = frozenset(inp.task_signatures)
+        bonus_ops = set()
+        if "change:additive" in sigs and "role:has_marker" in sigs:
+            bonus_ops.update({"overlay", "fill_region", "find_objects"})
+        if "color:new_in_output" in sigs or "color:palette_subset" in sigs:
+            bonus_ops.update({"recolor", "infer_map", "apply_color_map"})
+
+        def _score(idx: int) -> tuple[int, int, int]:
+            text = program_texts[idx]
+            lines = [l for l in text.splitlines() if l.startswith(("let ", "bind "))]
+            step_count = len(lines)
+            bonus = sum(1 for op in bonus_ops if op + "(" in text)
+            # Sort key: fewer steps first, more bonus ops first, original index for stability
+            return (step_count, -bonus, idx)
+
+        ranked = sorted(range(len(program_texts)), key=_score)
+        changed = ranked != list(range(len(program_texts)))
+        return ProgramRanking(indices=tuple(ranked), changed=changed,
+                              policy_name="heuristic")
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +258,19 @@ class LocalCausalLMPolicy(LocalPolicy):
             return None
         return self._generate_sketch(inp)
 
+    def rank_programs(
+        self,
+        program_texts: Sequence[str],
+        inp: PolicyInput,
+    ) -> ProgramRanking:
+        if self.dry_run:
+            return ProgramRanking(
+                indices=tuple(range(len(program_texts))),
+                changed=False,
+                policy_name="local_lm_dry",
+            )
+        return self._rank_programs(program_texts, inp)
+
     # -- private generation stubs (to be filled when weights exist) -----------
 
     def _generate_focus(self, inp: PolicyInput) -> FocusPrediction:
@@ -215,4 +284,8 @@ class LocalCausalLMPolicy(LocalPolicy):
 
     def _generate_sketch(self, inp: PolicyInput) -> Sketch | None:
         """Autoregressively generate a programme sketch."""
+        raise NotImplementedError("Model inference not yet implemented")
+
+    def _rank_programs(self, program_texts: Sequence[str], inp: PolicyInput) -> ProgramRanking:
+        """Score programs by log-likelihood under the model."""
         raise NotImplementedError("Model inference not yet implemented")

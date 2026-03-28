@@ -6,7 +6,7 @@ from typing import Callable
 
 import numpy as np
 
-from aria.types import Color, Grid, ObjectNode, Shape, Symmetry, Type, make_grid
+from aria.types import Color, Dir, Grid, ObjectNode, Shape, Symmetry, Type, make_grid
 from aria.runtime.ops import OpSignature, register
 from aria.graph.cc_label import label_4conn
 
@@ -41,6 +41,44 @@ def _by_shape(shape: Shape) -> Callable[[ObjectNode], bool]:
     """Return a predicate that tests for the given shape."""
     def pred(obj: ObjectNode) -> bool:
         return obj.shape == shape
+    return pred
+
+
+def _by_relative_pos(direction: Dir, ref_obj: ObjectNode) -> Callable[[ObjectNode], bool]:
+    """Return a predicate that selects objects in the given direction from ref_obj.
+
+    Uses object centers (bbox midpoint). Strict inequality — objects at
+    the same row/col as the reference are excluded.
+    - UP:    center_y(obj) < center_y(ref)
+    - DOWN:  center_y(obj) > center_y(ref)
+    - LEFT:  center_x(obj) < center_x(ref)
+    - RIGHT: center_x(obj) > center_x(ref)
+    """
+    ref_cx = ref_obj.bbox[0] + ref_obj.bbox[2] // 2
+    ref_cy = ref_obj.bbox[1] + ref_obj.bbox[3] // 2
+
+    def pred(obj: ObjectNode) -> bool:
+        if obj.id == ref_obj.id:
+            return False
+        cx = obj.bbox[0] + obj.bbox[2] // 2
+        cy = obj.bbox[1] + obj.bbox[3] // 2
+        if direction == Dir.UP:
+            return cy < ref_cy
+        if direction == Dir.DOWN:
+            return cy > ref_cy
+        if direction == Dir.LEFT:
+            return cx < ref_cx
+        if direction == Dir.RIGHT:
+            return cx > ref_cx
+        return False
+
+    return pred
+
+
+def _by_size(size: int) -> Callable[[ObjectNode], bool]:
+    """Return a predicate that tests for exact pixel count."""
+    def pred(obj: ObjectNode) -> bool:
+        return obj.size == size
     return pred
 
 
@@ -107,6 +145,11 @@ def _singleton(objects: set[ObjectNode]) -> ObjectNode:
     return next(iter(objects))
 
 
+def _singleton_set(obj: ObjectNode) -> set[ObjectNode]:
+    """Wrap a single object into a one-element set."""
+    return {obj}
+
+
 def _nth(idx: int, obj_list: set[ObjectNode] | list[ObjectNode]) -> ObjectNode:
     """Return the nth object, sorted by id for determinism."""
     if isinstance(obj_list, set):
@@ -169,6 +212,21 @@ register(
 )
 
 register(
+    "by_relative_pos",
+    OpSignature(
+        params=(("direction", Type.DIR), ("ref_obj", Type.OBJECT)),
+        return_type=Type.PREDICATE,
+    ),
+    _by_relative_pos,
+)
+
+register(
+    "by_size",
+    OpSignature(params=(("size", Type.INT),), return_type=Type.PREDICATE),
+    _by_size,
+)
+
+register(
     "by_size_rank",
     OpSignature(
         params=(("rank", Type.INT), ("objects", Type.OBJECT_SET)),
@@ -214,6 +272,12 @@ register(
     "singleton",
     OpSignature(params=(("objects", Type.OBJECT_SET),), return_type=Type.OBJECT),
     _singleton,
+)
+
+register(
+    "singleton_set",
+    OpSignature(params=(("obj", Type.OBJECT),), return_type=Type.OBJECT_SET),
+    _singleton_set,
 )
 
 register(

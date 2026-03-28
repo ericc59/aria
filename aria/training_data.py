@@ -7,8 +7,10 @@ grouped by task type.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -426,3 +428,152 @@ def load_jsonl(path: str | Path) -> list[dict[str, Any]]:
             if line:
                 result.append(json.loads(line))
     return result
+
+
+# ---------------------------------------------------------------------------
+# Schema validation
+# ---------------------------------------------------------------------------
+
+_REQUIRED_FIELDS = {"schema_version", "task_type", "task_id", "task_signatures",
+                    "current_program", "round_index", "feedback", "target",
+                    "winning_program"}
+
+_TARGET_REQUIRED: dict[str, set[str]] = {
+    "SKETCH": {"program"},
+    "NEXT_FOCUS": {"focus"},
+    "NEXT_EDIT": {"after_program", "edit_quality"},
+    "CANDIDATE_RANK": {"preferred", "rejected"},
+}
+
+
+@dataclass
+class ValidationResult:
+    valid: int = 0
+    invalid: int = 0
+    errors: list[str] = field(default_factory=list)
+
+
+def validate_example(ex: TrainingExample) -> list[str]:
+    """Return a list of validation errors for a single example (empty = valid)."""
+    errors: list[str] = []
+    d = ex.to_dict()
+
+    missing = _REQUIRED_FIELDS - set(d.keys())
+    if missing:
+        errors.append(f"missing fields: {sorted(missing)}")
+
+    if ex.task_type not in TASK_TYPES:
+        errors.append(f"unknown task_type: {ex.task_type}")
+        return errors
+
+    if not ex.task_signatures:
+        errors.append("empty task_signatures")
+
+    target = ex.target
+    required_target = _TARGET_REQUIRED.get(ex.task_type, set())
+    missing_target = required_target - set(target.keys())
+    if missing_target:
+        errors.append(f"target missing: {sorted(missing_target)}")
+
+    if ex.task_type == "NEXT_EDIT":
+        quality = target.get("edit_quality")
+        if quality not in ("strong", "medium", "weak"):
+            errors.append(f"invalid edit_quality: {quality}")
+        if quality in ("strong", "medium") and not target.get("before_program"):
+            errors.append("strong/medium edit missing before_program")
+
+    if ex.task_type == "SKETCH":
+        prog = target.get("program", "")
+        if not isinstance(prog, str) or not prog.strip():
+            errors.append("SKETCH target has empty program")
+
+    return errors
+
+
+def validate_examples(examples: list[TrainingExample]) -> ValidationResult:
+    """Validate a batch of examples, returning aggregate results."""
+    result = ValidationResult()
+    for ex in examples:
+        errs = validate_example(ex)
+        if errs:
+            result.invalid += 1
+            result.errors.extend(
+                f"[{ex.task_type}:{ex.task_id}] {e}" for e in errs
+            )
+        else:
+            result.valid += 1
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Deduplication
+# ---------------------------------------------------------------------------
+
+def _example_content_hash(ex: TrainingExample) -> str:
+    """Deterministic hash of the semantically meaningful fields."""
+    key = json.dumps({
+        "task_type": ex.task_type,
+        "task_signatures": list(ex.task_signatures),
+        "target": ex.target,
+        "current_program": ex.current_program,
+        "round_index": ex.round_index,
+    }, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+
+def deduplicate(examples: list[TrainingExample]) -> tuple[list[TrainingExample], int]:
+    """Remove duplicate examples by content hash. Returns (deduped, num_removed)."""
+    seen: set[str] = set()
+    unique: list[TrainingExample] = []
+    for ex in examples:
+        h = _example_content_hash(ex)
+        if h not in seen:
+            seen.add(h)
+            unique.append(ex)
+    return unique, len(examples) - len(unique)
+
+
+# ---------------------------------------------------------------------------
+# Dataset-level statistics
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DatasetStats:
+    total: int = 0
+    by_task_type: dict[str, int] = field(default_factory=dict)
+    by_edit_quality: dict[str, int] = field(default_factory=dict)
+    unique_task_ids: int = 0
+    duplicates_removed: int = 0
+    validation_errors: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "total": self.total,
+            "by_task_type": self.by_task_type,
+            "by_edit_quality": self.by_edit_quality if self.by_edit_quality else None,
+            "unique_task_ids": self.unique_task_ids,
+            "duplicates_removed": self.duplicates_removed,
+            "validation_errors": self.validation_errors,
+        }
+
+
+def compute_dataset_stats(examples: list[TrainingExample]) -> DatasetStats:
+    """Compute summary statistics for a set of training examples."""
+    by_type: Counter[str] = Counter()
+    by_quality: Counter[str] = Counter()
+    task_ids: set[str] = set()
+
+    for ex in examples:
+        by_type[ex.task_type] += 1
+        if ex.task_id:
+            task_ids.add(ex.task_id)
+        if ex.task_type == "NEXT_EDIT":
+            q = ex.target.get("edit_quality", "unset")
+            by_quality[q] += 1
+
+    return DatasetStats(
+        total=len(examples),
+        by_task_type=dict(sorted(by_type.items())),
+        by_edit_quality=dict(sorted(by_quality.items())),
+        unique_task_ids=len(task_ids),
+    )

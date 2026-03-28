@@ -498,6 +498,106 @@ register(
 
 
 # ---------------------------------------------------------------------------
+# Grid shifting
+# ---------------------------------------------------------------------------
+
+
+def _shift_grid(dr: int, dc: int, fill: int, grid: Grid) -> Grid:
+    """Shift all grid content by (dr, dc) rows/cols, filling vacated cells.
+
+    Positive dr = shift down, positive dc = shift right.
+    Content that shifts out of bounds is clipped (not wrapped).
+    """
+    rows, cols = grid.shape
+    result = np.full_like(grid, fill)
+    # Compute source and destination slices
+    src_r0 = max(0, -dr)
+    src_r1 = min(rows, rows - dr)
+    dst_r0 = max(0, dr)
+    dst_r1 = min(rows, rows + dr)
+    src_c0 = max(0, -dc)
+    src_c1 = min(cols, cols - dc)
+    dst_c0 = max(0, dc)
+    dst_c1 = min(cols, cols + dc)
+    if src_r0 < src_r1 and src_c0 < src_c1:
+        result[dst_r0:dst_r1, dst_c0:dst_c1] = grid[src_r0:src_r1, src_c0:src_c1]
+    return result
+
+
+register(
+    "shift_grid",
+    OpSignature(
+        params=(
+            ("dr", Type.INT),
+            ("dc", Type.INT),
+            ("fill", Type.COLOR),
+            ("grid", Type.GRID),
+        ),
+        return_type=Type.GRID,
+    ),
+    _shift_grid,
+)
+
+
+# ---------------------------------------------------------------------------
+# Object reassembly
+# ---------------------------------------------------------------------------
+
+
+def _paint_objects(objects, grid: Grid) -> Grid:
+    """Paint each object from the set onto a copy of grid at its bbox position.
+
+    This is the generic reassembly step: after extracting and transforming
+    objects, paint them back onto the grid. Non-zero pixels in the object
+    overwrite the grid.
+    """
+    from aria.runtime.ops.compat import coerce_to_grid
+
+    # Handle ObjectNode, set, list
+    if isinstance(objects, ObjectNode):
+        objects = {objects}
+    elif isinstance(objects, (list, tuple)):
+        objects = set(objects)
+    elif not isinstance(objects, (set, frozenset)):
+        coerced = coerce_to_grid(objects)
+        if coerced is not None:
+            # If it's already a grid, overlay
+            result = grid.copy()
+            mask = coerced != 0
+            if coerced.shape == grid.shape:
+                result[mask] = coerced[mask]
+            return result
+        return grid.copy()
+
+    result = grid.copy()
+    rows, cols = grid.shape
+    for obj in objects:
+        x, y, w, h = obj.bbox
+        mask = obj.mask
+        for r in range(h):
+            for c in range(w):
+                if mask[r, c]:
+                    gr = y + r
+                    gc = x + c
+                    if 0 <= gr < rows and 0 <= gc < cols:
+                        result[gr, gc] = obj.color
+    return result
+
+
+register(
+    "paint_objects",
+    OpSignature(
+        params=(
+            ("objects", Type.OBJECT_SET),
+            ("grid", Type.GRID),
+        ),
+        return_type=Type.GRID,
+    ),
+    _paint_objects,
+)
+
+
+# ---------------------------------------------------------------------------
 # Pattern stamping: apply spatial patterns around matching objects
 # ---------------------------------------------------------------------------
 

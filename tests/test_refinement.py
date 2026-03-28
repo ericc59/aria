@@ -12,6 +12,7 @@ from aria.refinement import (
     RefinementFeedback,
     RefinementPlan,
     RefinementRoundResult,
+    _build_program_ranker,
     build_policy_input,
     focus_to_plan,
     run_refinement_loop,
@@ -455,3 +456,195 @@ def test_focus_to_plan_maps_known_focuses():
     plan = focus_to_plan("generic", round_index=2, base_max_steps=3, base_max_candidates=100)
     assert plan.name == "generic_expand_2"
     assert plan.max_steps == 4
+
+
+# ---------------------------------------------------------------------------
+# Dims-change reconstruction integration
+# ---------------------------------------------------------------------------
+
+
+def test_refinement_loop_dims_change_transpose_solved():
+    """Dims-change task (transpose) should be solved by some phase."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 2, 3], [4, 5, 6]]),
+            output=grid_from_list([[1, 4], [2, 5], [3, 6]]),
+        ),
+        DemoPair(
+            input=grid_from_list([[7, 8], [9, 1]]),
+            output=grid_from_list([[7, 9], [8, 1]]),
+        ),
+    )
+    result = run_refinement_loop(
+        demos,
+        Library(),
+        max_steps=2,
+        max_candidates=50,
+        max_rounds=1,
+    )
+    assert result.solved
+
+
+def test_refinement_loop_dims_change_objects_on_blank():
+    """Dims-change task (remove + shrink) should be solved."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([
+                [1, 0, 2],
+                [0, 0, 0],
+                [0, 0, 0],
+            ]),
+            output=grid_from_list([
+                [1, 0],
+                [0, 0],
+            ]),
+        ),
+        DemoPair(
+            input=grid_from_list([
+                [0, 1, 2],
+                [0, 0, 0],
+                [0, 0, 0],
+            ]),
+            output=grid_from_list([
+                [0, 1],
+                [0, 0],
+            ]),
+        ),
+    )
+    result = run_refinement_loop(
+        demos,
+        Library(),
+        max_steps=2,
+        max_candidates=50,
+        max_rounds=1,
+    )
+    assert result.solved
+
+
+def test_refinement_loop_same_dims_no_dims_reconstruction():
+    """Same-dims tasks should not trigger dims reconstruction."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 0], [0, 0]]),
+            output=grid_from_list([[1, 0], [0, 0]]),
+        ),
+    )
+    result = run_refinement_loop(
+        demos,
+        Library(),
+        max_steps=1,
+        max_candidates=5,
+        max_rounds=1,
+    )
+    assert result.dims_reconstruction is None
+
+
+def test_refinement_loop_dims_reconstruction_reports_fields_on_unsolvable():
+    """Unsolvable dims-change task should still have dims_reconstruction reporting."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 2], [3, 4]]),
+            output=grid_from_list([[9, 8, 7], [6, 5, 4], [3, 2, 1]]),
+        ),
+    )
+    result = run_refinement_loop(
+        demos,
+        Library(),
+        max_steps=2,
+        max_candidates=50,
+        max_rounds=1,
+    )
+    assert not result.solved
+    assert result.dims_reconstruction is not None
+    assert result.dims_reconstruction.attempted
+    assert not result.dims_reconstruction.solved
+    assert result.dims_reconstruction.inferred_output_dims_source in (
+        "fixed", "scale_input", "transpose", "unknown",
+    )
+    assert result.dims_reconstruction.candidates_tested > 0
+
+
+# ---------------------------------------------------------------------------
+# _build_program_ranker integration
+# ---------------------------------------------------------------------------
+
+
+def test_build_program_ranker_returns_callable():
+    """_build_program_ranker should return a callable that works on program texts."""
+    ranker = _build_program_ranker(None, frozenset({"dims:same"}), ())
+    assert callable(ranker)
+    texts = [
+        "let v0: Grid = identity(input)\noutput = v0",
+        "let v0: Grid = recolor(input, 3)\noutput = v0",
+    ]
+    indices, changed, policy_name = ranker(texts)
+    assert len(indices) == 2
+    assert set(indices) == {0, 1}
+    assert isinstance(changed, bool)
+    assert isinstance(policy_name, str)
+
+
+def test_build_program_ranker_with_local_policy():
+    """_build_program_ranker should use local_policy if provided."""
+    lp = LocalCausalLMPolicy(dry_run=True)
+    ranker = _build_program_ranker(lp, frozenset({"dims:same"}), ())
+    texts = ["prog_a", "prog_b"]
+    indices, changed, policy_name = ranker(texts)
+    # dry_run preserves order
+    assert indices == (0, 1)
+    assert changed is False
+    assert policy_name == "local_lm_dry"
+
+
+def test_build_program_ranker_heuristic_reorders():
+    """Heuristic ranker should reorder when step counts differ."""
+    ranker = _build_program_ranker(None, frozenset({"dims:same"}), ())
+    short = "let v0: Grid = identity(input)\noutput = v0"
+    long = (
+        "let v0: Grid = find_objects(input)\n"
+        "let v1: Grid = recolor(v0, 3)\n"
+        "let v2: Grid = overlay(v1, input)\n"
+        "output = v2"
+    )
+    indices, changed, policy_name = ranker([long, short])
+    assert indices[0] == 1  # short should come first
+    assert changed is True
+    assert policy_name == "heuristic"
+
+
+def test_refinement_loop_rerank_edits_false_disables_ranker():
+    """With rerank_edits=False, structural_edit_search should get no ranker."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 0], [0, 0]]),
+            output=grid_from_list([[1, 0], [0, 0]]),
+        ),
+    )
+    result = run_refinement_loop(
+        demos, Library(),
+        max_steps=1, max_candidates=10, max_rounds=1,
+        rerank_edits=False,
+    )
+    # Should not crash and structural_edit_result, if present, should have no reranking
+    if result.structural_edit_result is not None:
+        assert result.structural_edit_result.reranking is None
+
+
+def test_refinement_loop_rerank_edits_true_enables_ranker():
+    """With rerank_edits=True (default), ranker should be wired in."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 0], [0, 0]]),
+            output=grid_from_list([[1, 0], [0, 0]]),
+        ),
+    )
+    result = run_refinement_loop(
+        demos, Library(),
+        max_steps=1, max_candidates=10, max_rounds=1,
+        rerank_edits=True,
+    )
+    # If structural edit ran and had candidates, reranking should be present
+    if (result.structural_edit_result is not None
+            and result.structural_edit_result.candidates_tried > 0):
+        assert result.structural_edit_result.reranking is not None
+        assert result.structural_edit_result.reranking.applied is True

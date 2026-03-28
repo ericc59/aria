@@ -12,8 +12,15 @@ if TYPE_CHECKING:
 from aria.graph.signatures import compute_task_signatures
 from aria.library.store import Library
 from aria.decompose import DecompPlan, decompose_task
+from aria.explanation import RepairResult, attempt_program_repair, attempt_repair
+from aria.structural_edit import EditResult, structural_edit_search
 from aria.hypotheses import SkeletonResult, check_skeleton_hypotheses
-from aria.observe import ObservationSynthesisResult, observe_and_synthesize
+from aria.observe import (
+    DimsReconstructionResult,
+    ObservationSynthesisResult,
+    dims_change_reconstruct,
+    observe_and_synthesize,
+)
 from aria.synthesize import SynthesisResult, synthesize_from_observations
 from aria.mutation import Mutation, mutate_program
 from aria.offline_search import (
@@ -165,6 +172,9 @@ class RefinementResult:
     skeleton_result: SkeletonResult | None = None
     decomposition: DecompPlan | None = None
     synthesis_result: SynthesisResult | None = None
+    repair_result: RepairResult | None = None
+    structural_edit_result: EditResult | None = None
+    dims_reconstruction: DimsReconstructionResult | None = None
 
 
 class HeuristicRefinementPolicy:
@@ -303,6 +313,7 @@ def run_refinement_loop(
     beam_width: int = 0,
     beam_rounds: int = 3,
     beam_mutations_per_candidate: int = 30,
+    rerank_edits: bool = True,
 ) -> RefinementResult:
     task_signatures = compute_task_signatures(demos)
     refinement_policy = policy or HeuristicRefinementPolicy()
@@ -338,6 +349,25 @@ def run_refinement_loop(
             decomposition=decomposition,
             synthesis_result=synthesis_result,
         )
+
+    # Phase 0c: dims-change reconstruction — blank-canvas strategies
+    dims_recon: DimsReconstructionResult | None = None
+    is_dims_change = demos and any(
+        d.input.shape != d.output.shape for d in demos
+    )
+    if is_dims_change:
+        dims_recon = dims_change_reconstruct(demos)
+        total_candidates += dims_recon.candidates_tested
+        if dims_recon.solved:
+            return RefinementResult(
+                solved=True,
+                winning_program=dims_recon.winning_program,
+                candidates_tried=total_candidates,
+                rounds=(),
+                decomposition=decomposition,
+                synthesis_result=synthesis_result,
+                dims_reconstruction=dims_recon,
+            )
 
     # Retrieve strong abstractions as search guidance
     hints = tuple(retrieve_abstractions(demos, library))
@@ -520,6 +550,139 @@ def run_refinement_loop(
                     synthesis_result=synthesis_result,
                 )
 
+    # Explanation-driven repair phase: try to fix same-dims near-misses
+    repair_result = None
+    if demos and demos[0].input.shape == demos[0].output.shape:
+        near_miss_grids, near_miss_progs = _collect_near_miss_grids(demos, rounds, synthesis_result)
+
+        # Phase 1: try program-level repair (produces executable programs)
+        prog_candidates = [p for p in near_miss_progs if p is not None]
+        if prog_candidates:
+            repair_result = attempt_program_repair(demos, prog_candidates, max_repairs=30)
+            total_candidates += repair_result.repairs_tried
+            if repair_result.solved and repair_result.winning_program is not None:
+                return RefinementResult(
+                    solved=True,
+                    winning_program=repair_result.winning_program,
+                    candidates_tried=total_candidates,
+                    rounds=tuple(rounds),
+                    beam=beam_result,
+                    abstraction_hints=hints,
+                    skeleton_result=skeleton_result,
+                    decomposition=decomposition,
+                    synthesis_result=synthesis_result,
+                    repair_result=repair_result,
+                )
+
+        # Phase 2: grid-level repair (diagnostic, may not produce programs)
+        if near_miss_grids:
+            grid_repair = attempt_repair(
+                demos, near_miss_grids, near_miss_progs, max_repairs=20,
+            )
+            total_candidates += grid_repair.repairs_tried
+            if repair_result is None or (grid_repair.solved and not (repair_result and repair_result.solved)):
+                repair_result = grid_repair
+
+            # Phase 3: target-directed search — search against repaired targets
+            if (grid_repair.solved
+                    and grid_repair.winning_program is None
+                    and grid_repair.repaired_targets is not None
+                    and len(grid_repair.repaired_targets) == len(demos)):
+                # Build alternate demos with repaired outputs as targets
+                target_demos = tuple(
+                    DemoPair(input=demo.input, output=target)
+                    for demo, target in zip(demos, grid_repair.repaired_targets)
+                )
+                target_result = search_program(
+                    target_demos,
+                    library,
+                    program_store=program_store,
+                    max_steps=max_steps + 1,
+                    max_candidates=max(max_candidates // 2, 500),
+                    include_core_ops=include_core_ops,
+                    preferred_ops=preferred,
+                    excluded_ops=excluded,
+                    depth_preferred_fn=decomposition.ops_for_depth,
+                )
+                total_candidates += target_result.candidates_tried
+                if target_result.solved and target_result.winning_program is not None:
+                    # Validate against original demos as final acceptance
+                    from aria.verify.verifier import verify as final_verify
+                    final_vr = final_verify(target_result.winning_program, demos)
+                    if final_vr.passed:
+                        return RefinementResult(
+                            solved=True,
+                            winning_program=target_result.winning_program,
+                            candidates_tried=total_candidates,
+                            rounds=tuple(rounds),
+                            beam=beam_result,
+                            abstraction_hints=hints,
+                            skeleton_result=skeleton_result,
+                            decomposition=decomposition,
+                            synthesis_result=synthesis_result,
+                            repair_result=repair_result,
+                        )
+
+            # Phase 3b: structural edit search over near-miss programs
+            near_miss_executable = [p for p in near_miss_progs if p is not None]
+            if near_miss_executable or (obs_result and obs_result.rules):
+                edit_targets = (
+                    grid_repair.repaired_targets
+                    if grid_repair.repaired_targets is not None
+                    and len(grid_repair.repaired_targets) == len(demos)
+                    else None
+                )
+
+                # Build reranking callback from policy when enabled.
+                edit_ranker = (
+                    _build_program_ranker(
+                        local_policy, task_signatures, tuple(rounds),
+                    )
+                    if rerank_edits
+                    else None
+                )
+
+                edit_result = structural_edit_search(
+                    demos, near_miss_executable or [],
+                    repaired_targets=edit_targets,
+                    observation_rules=list(obs_result.rules) if obs_result else None,
+                    repair_error_class=(
+                        grid_repair.primary_error_class
+                        if hasattr(grid_repair, 'primary_error_class')
+                        else None
+                    ),
+                    program_ranker=edit_ranker,
+                )
+                total_candidates += edit_result.candidates_tried
+                if edit_result.solved and edit_result.winning_program is not None:
+                    return RefinementResult(
+                        solved=True,
+                        winning_program=edit_result.winning_program,
+                        candidates_tried=total_candidates,
+                        rounds=tuple(rounds),
+                        beam=beam_result,
+                        abstraction_hints=hints,
+                        skeleton_result=skeleton_result,
+                        decomposition=decomposition,
+                        synthesis_result=synthesis_result,
+                        repair_result=repair_result,
+                        structural_edit_result=edit_result,
+                    )
+
+            if grid_repair.solved:
+                return RefinementResult(
+                    solved=True,
+                    winning_program=grid_repair.winning_program,
+                    candidates_tried=total_candidates,
+                    rounds=tuple(rounds),
+                    beam=beam_result,
+                    abstraction_hints=hints,
+                    skeleton_result=skeleton_result,
+                    decomposition=decomposition,
+                    synthesis_result=synthesis_result,
+                    repair_result=repair_result,
+                )
+
     return RefinementResult(
         solved=False,
         winning_program=None,
@@ -530,7 +693,59 @@ def run_refinement_loop(
         skeleton_result=skeleton_result,
         decomposition=decomposition,
         synthesis_result=synthesis_result,
+        repair_result=repair_result,
+        dims_reconstruction=dims_recon,
     )
+
+
+def _collect_near_miss_grids(
+    demos: tuple[DemoPair, ...],
+    rounds: list[RefinementRoundResult],
+    synthesis_result: SynthesisResult | None,
+) -> tuple[list[Grid], list[Program | None]]:
+    """Collect same-dims candidate grids and their source programs.
+
+    Returns parallel lists: (grids, programs). programs[i] is None when
+    the grid has no known source program (e.g., the input itself).
+    """
+    import numpy as np
+    from aria.runtime.executor import execute
+    from aria.proposer.parser import parse_program, ParseError
+
+    grids: list[Grid] = []
+    programs: list[Program | None] = []
+    seen: set[bytes] = set()
+    expected_shape = demos[0].output.shape
+
+    def _add(g: Grid, p: Program | None = None) -> None:
+        if g.shape != expected_shape:
+            return
+        key = g.tobytes()
+        if key not in seen:
+            seen.add(key)
+            grids.append(g)
+            programs.append(p)
+
+    # Add the input as a candidate (no program)
+    _add(demos[0].input, None)
+
+    # Add candidates from search traces (with programs)
+    for rnd in rounds:
+        for entry in rnd.trace:
+            if entry.error_type == "wrong_output" and entry.diff:
+                actual_dims = entry.diff.get("actual_dims")
+                if actual_dims and actual_dims == tuple(expected_shape):
+                    try:
+                        prog = parse_program(entry.program_text)
+                        result = execute(prog, demos[0].input, None)
+                        if isinstance(result, np.ndarray):
+                            _add(result, prog)
+                    except Exception:
+                        pass
+            if len(grids) >= 8:
+                break
+
+    return grids, programs
 
 
 def summarize_trace_feedback(
@@ -922,3 +1137,26 @@ def _extract_seed_programs(
             continue
 
     return programs
+
+
+def _build_program_ranker(
+    local_policy: "LocalPolicy | None",
+    task_signatures: frozenset[str],
+    prior_rounds: tuple[RefinementRoundResult, ...],
+):
+    """Build a program_ranker callback for structural_edit_search.
+
+    If local_policy is None, uses HeuristicBaselinePolicy as default.
+    Returns a callable matching the _ProgramRanker protocol:
+        (list[str]) -> (indices, changed, policy_name)
+    """
+    from aria.local_policy import HeuristicBaselinePolicy
+
+    policy = local_policy if local_policy is not None else HeuristicBaselinePolicy()
+    policy_input = build_policy_input(task_signatures, len(prior_rounds), prior_rounds)
+
+    def _ranker(program_texts: list[str]) -> tuple[tuple[int, ...], bool, str]:
+        ranking = policy.rank_programs(program_texts, policy_input)
+        return ranking.indices, ranking.changed, ranking.policy_name
+
+    return _ranker

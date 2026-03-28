@@ -803,7 +803,7 @@ class TestTrainConfig:
 
 
 class TestConfigFiles:
-    @pytest.mark.parametrize("name", ["next_focus", "next_edit", "sketch"])
+    @pytest.mark.parametrize("name", ["next_focus", "next_edit", "sketch", "candidate_rank"])
     def test_config_parses(self, name: str):
         from scripts.train_lora import TrainConfig
 

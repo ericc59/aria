@@ -49,6 +49,7 @@ def solve_task(
     beam_rounds: int = 3,
     beam_mutations_per_candidate: int = 30,
     local_policy: LocalPolicy | None = None,
+    rerank_edits: bool = True,
 ) -> SolveResult:
     """Solve a single ARC task without any proposer model."""
     task_signatures = tuple(sorted(compute_task_signatures(task.train)))
@@ -94,6 +95,7 @@ def solve_task(
         beam_width=beam_width,
         beam_rounds=beam_rounds,
         beam_mutations_per_candidate=beam_mutations_per_candidate,
+        rerank_edits=rerank_edits,
     )
 
     if not refinement_result.solved or refinement_result.winning_program is None:

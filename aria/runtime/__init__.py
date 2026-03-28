@@ -16,6 +16,7 @@ import aria.runtime.ops.topo  # noqa: F401
 import aria.runtime.ops.context  # noqa: F401
 import aria.runtime.ops.arithmetic  # noqa: F401
 import aria.runtime.ops.cell  # noqa: F401
+import aria.runtime.ops.objects  # noqa: F401
 
 from aria.runtime.executor import execute, eval_expr, ExecutionError
 from aria.runtime.type_system import type_check

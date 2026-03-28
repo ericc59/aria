@@ -1,0 +1,36 @@
+# CANDIDATE_RANK — rank candidates by quality given scores + error info.
+#
+# Train after NEXT_FOCUS and NEXT_EDIT. Uses hard-negative selection
+# from refinement traces: the model learns to prefer the winning
+# candidate over scored failing candidates.
+#
+# Prompt includes rejected score, rejected error type, score delta,
+# and rejected score reasons when available.
+
+base_model: "Qwen/Qwen2.5-3B"
+use_4bit: false
+
+data_path: "traces/training_export.jsonl"
+data_format: "jsonl"
+task_types:
+  - "CANDIDATE_RANK"
+max_seq_len: 1024
+val_split: 0.1
+
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_modules:
+  - "q_proj"
+  - "v_proj"
+
+output_dir: "checkpoints/candidate_rank"
+epochs: 3
+batch_size: 4
+gradient_accumulation_steps: 4
+learning_rate: 2e-4
+warmup_ratio: 0.03
+weight_decay: 0.01
+logging_steps: 10
+save_steps: 200
+bf16: true
