@@ -1,0 +1,200 @@
+# Structural Gates Gold Annotations
+# 10-task initial evaluation set for ARC-2
+#
+# Ontology version: 1.0
+# Labels are coarse and deliberate — do not expand casually.
+
+tasks:
+
+  # --- Solved correspondence tasks ---
+
+  - task_id: 97d7923e
+    decomposition: object
+    entities:
+      - name: non_singleton_objects
+        kind: object
+        selector_note: "multi-cell colored objects on bg"
+      - name: singleton_markers
+        kind: marker
+        selector_note: "single-cell markers adjacent to objects"
+    relations:
+      - kind: paired_with
+        source: singleton_markers
+        target: non_singleton_objects
+      - kind: adjacent_to
+        source: singleton_markers
+        target: non_singleton_objects
+    template: match_recolor
+    critical_slots:
+      marker_set: "singletons by adjacency"
+      color_role: "marker color -> object recolor"
+      assignment_rule: "adjacent singleton determines target color"
+
+  - task_id: 88e364bc
+    decomposition: object
+    entities:
+      - name: foreground_objects
+        kind: object
+        selector_note: "colored objects on bg"
+      - name: markers
+        kind: marker
+        selector_note: "small distinctive indicators"
+    relations:
+      - kind: paired_with
+        source: markers
+        target: foreground_objects
+    template: match_recolor
+    critical_slots:
+      marker_set: "markers paired with objects"
+      color_role: "marker-derived recoloring"
+      assignment_rule: "correspondence determines color"
+
+  # --- Blocked correspondence/structural tasks ---
+
+  - task_id: 332f06d7
+    decomposition: object
+    entities:
+      - name: small_blocks
+        kind: object
+        selector_note: "small 2x2 colored blocks"
+      - name: large_structure
+        kind: object
+        selector_note: "large color-1 connected structure"
+    relations:
+      - kind: adjacent_to
+        source: small_blocks
+        target: large_structure
+    template: swap
+    critical_slots:
+      color_role: "small blocks swap colors/positions"
+      assignment_rule: "endpoint blocks exchange identity"
+
+  - task_id: 3dc255db
+    decomposition: host_slot
+    entities:
+      - name: host_structures
+        kind: host
+        selector_note: "large enclosing objects"
+      - name: gap_cells
+        kind: gap
+        selector_note: "empty positions within hosts"
+      - name: markers
+        kind: marker
+        selector_note: "singletons indicating fill targets"
+    relations:
+      - kind: host_of
+        source: host_structures
+        target: gap_cells
+      - kind: gap_of
+        source: gap_cells
+        target: host_structures
+      - kind: contains
+        source: host_structures
+        target: markers
+    template: host_slot_place
+    critical_slots:
+      host_set: "enclosing structures"
+      gap_set: "fill positions"
+      marker_set: "fill indicators"
+      assignment_rule: "marker determines fill content"
+
+  - task_id: 9bbf930d
+    decomposition: object
+    entities:
+      - name: border_stripe
+        kind: object
+        selector_note: "vertical color-6 stripe at grid edge"
+      - name: horizontal_bands
+        kind: object
+        selector_note: "horizontal colored bands"
+    relations:
+      - kind: adjacent_to
+        source: border_stripe
+        target: horizontal_bands
+    template: swap
+    critical_slots:
+      color_role: "border color swaps with bg at specific positions"
+      assignment_rule: "positional swap between border and bg colors"
+      assignment_rule: "aligned marker-object correspondence"
+
+  - task_id: 8b7bacbf
+    decomposition: object
+    entities:
+      - name: structured_objects
+        kind: object
+        selector_note: "multi-cell objects with internal structure"
+      - name: reference_markers
+        kind: marker
+        selector_note: "reference indicators"
+    relations:
+      - kind: paired_with
+        source: reference_markers
+        target: structured_objects
+      - kind: adjacent_to
+        source: reference_markers
+        target: structured_objects
+    template: match_recolor
+    critical_slots:
+      marker_set: "reference markers"
+      color_role: "structural recoloring rule"
+      assignment_rule: "marker-based correspondence"
+
+  # --- Extraction/panel tasks ---
+
+  - task_id: 0934a4d8
+    decomposition: object
+    entities:
+      - name: source_objects
+        kind: object
+        selector_note: "objects to extract from grid"
+    relations: []
+    template: extract_modify
+    critical_slots:
+      assignment_rule: "extract and compose selected objects"
+
+  - task_id: 4c7dc4dd
+    decomposition: region
+    entities:
+      - name: target_region
+        kind: region
+        selector_note: "region containing answer"
+    relations:
+      - kind: contains
+        source: target_region
+        target: target_region
+    template: extract_modify
+    critical_slots:
+      assignment_rule: "identify and crop target region"
+
+  - task_id: 5545f144
+    decomposition: panel
+    entities:
+      - name: panels
+        kind: panel
+        selector_note: "columns separated by color 3"
+    relations:
+      - kind: aligned_col
+        source: panels
+        target: panels
+    template: panel_combine_rewrite
+    critical_slots:
+      axis: "column-based panel separation"
+      assignment_rule: "combine/select panels"
+
+  - task_id: 58490d8a
+    decomposition: partition
+    entities:
+      - name: grid_cells
+        kind: panel
+        selector_note: "cells formed by color-3 separator grid"
+    relations:
+      - kind: aligned_row
+        source: grid_cells
+        target: grid_cells
+      - kind: aligned_col
+        source: grid_cells
+        target: grid_cells
+    template: panel_combine_rewrite
+    critical_slots:
+      axis: "row+col partition"
+      assignment_rule: "combine partition cells to output"

@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "records": [
+    {
+      "record_id": "c1d9c9482bd1aaae",
+      "task_ids": [
+        "00d62c1b"
+      ],
+      "source": "baseline",
+      "decomposition_type": "flat",
+      "selector_family": "unknown",
+      "scope_family": "unknown",
+      "op_family": "fill",
+      "correspondence": "none",
+      "composition_depth": 1,
+      "perception_key": {
+        "dims_relation": "same",
+        "palette_relation": "new_colors",
+        "change_type": "additive",
+        "object_count_bucket": "many",
+        "has_partition": false,
+        "has_frame": false,
+        "has_marker": true,
+        "has_legend": false,
+        "symmetry_tags": [],
+        "color_count_bucket": "few",
+        "partition_cell_count": null
+      },
+      "task_signatures": [
+        "change:additive",
+        "color:few_colors",
+        "color:new_in_output",
+        "dims:same",
+        "obj:many",
+        "rel:adjacent_pair",
+        "rel:same_color_pair",
+        "rel:same_shape_pair",
+        "role:has_marker"
+      ],
+      "verified": true,
+      "verify_mode": "stateless",
+      "repair_path": null
+    }
+  ]
+}

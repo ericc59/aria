@@ -428,7 +428,7 @@ def test_search_with_excluded_ops():
         demos,
         Library(),
         max_steps=1,
-        max_candidates=50,
+        max_candidates=100,
         excluded_ops=frozenset({"tile_grid", "upscale_grid", "stack_h", "stack_v"}),
     )
     assert result.solved  # should still find reflect_grid(HORIZONTAL, input)

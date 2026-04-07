@@ -1,0 +1,934 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="" xml:lang="">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <title>ARC-AGI Reference</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    html {
+      font-family: system-ui;
+      color: #1a1a1a;
+      background-color: #fdfdfd;
+    }
+    body {
+      margin: 0 auto;
+      max-width: 36em;
+      padding-left: 50px;
+      padding-right: 50px;
+      padding-top: 50px;
+      padding-bottom: 50px;
+      hyphens: auto;
+      overflow-wrap: break-word;
+      text-rendering: optimizeLegibility;
+      font-kerning: normal;
+    }
+    @media (max-width: 600px) {
+      body {
+        font-size: 0.9em;
+        padding: 12px;
+      }
+      h1 {
+        font-size: 1.8em;
+      }
+    }
+    @media print {
+      html {
+        background-color: white;
+      }
+      body {
+        background-color: transparent;
+        color: black;
+        font-size: 12pt;
+      }
+      p, h2, h3 {
+        orphans: 3;
+        widows: 3;
+      }
+      h2, h3, h4 {
+        page-break-after: avoid;
+      }
+    }
+    p {
+      margin: 1em 0;
+    }
+    a {
+      color: #1a1a1a;
+    }
+    a:visited {
+      color: #1a1a1a;
+    }
+    img {
+      max-width: 100%;
+    }
+    svg {
+      height: auto;
+      max-width: 100%;
+    }
+    h1, h2, h3, h4, h5, h6 {
+      margin-top: 1.4em;
+    }
+    h5, h6 {
+      font-size: 1em;
+      font-style: italic;
+    }
+    h6 {
+      font-weight: normal;
+    }
+    ol, ul {
+      padding-left: 1.7em;
+      margin-top: 1em;
+    }
+    li > ol, li > ul {
+      margin-top: 0;
+    }
+    blockquote {
+      margin: 1em 0 1em 1.7em;
+      padding-left: 1em;
+      border-left: 2px solid #e6e6e6;
+      color: #606060;
+    }
+    code {
+      font-family: Menlo, Monaco, Consolas, 'Lucida Console', monospace;
+      font-size: 85%;
+      margin: 0;
+      hyphens: manual;
+    }
+    pre {
+      margin: 1em 0;
+      overflow: auto;
+    }
+    pre code {
+      padding: 0;
+      overflow: visible;
+      overflow-wrap: normal;
+    }
+    .sourceCode {
+     background-color: transparent;
+     overflow: visible;
+    }
+    hr {
+      border: none;
+      border-top: 1px solid #1a1a1a;
+      height: 1px;
+      margin: 1em 0;
+    }
+    table {
+      margin: 1em 0;
+      border-collapse: collapse;
+      width: 100%;
+      overflow-x: auto;
+      display: block;
+      font-variant-numeric: lining-nums tabular-nums;
+    }
+    table caption {
+      margin-bottom: 0.75em;
+    }
+    tbody {
+      margin-top: 0.5em;
+      border-top: 1px solid #1a1a1a;
+      border-bottom: 1px solid #1a1a1a;
+    }
+    th {
+      border-top: 1px solid #1a1a1a;
+      padding: 0.25em 0.5em 0.25em 0.5em;
+    }
+    td {
+      padding: 0.125em 0.5em 0.25em 0.5em;
+    }
+    header {
+      margin-bottom: 4em;
+      text-align: center;
+    }
+    #TOC li {
+      list-style: none;
+    }
+    #TOC ul {
+      padding-left: 1.3em;
+    }
+    #TOC > ul {
+      padding-left: 0;
+    }
+    #TOC a:not(:hover) {
+      text-decoration: none;
+    }
+    code{white-space: pre-wrap;}
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: min(4vw, 1.5em);}
+    div.column{flex: auto; overflow-x: auto;}
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+    .display.math{display: block; text-align: center; margin: 0.5rem auto;}
+  
+    body {
+      max-width: 860px;
+      margin: 2em auto;
+      padding: 0 1.5em;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      font-size: 16px;
+      line-height: 1.6;
+      color: #1a1a1a;
+      background: #fff;
+    }
+    h1 { font-size: 2em; border-bottom: 2px solid #e1e4e8; padding-bottom: 0.3em; }
+    h2 { font-size: 1.5em; border-bottom: 1px solid #e1e4e8; padding-bottom: 0.2em; margin-top: 2em; }
+    h3 { font-size: 1.2em; margin-top: 1.5em; }
+    h4 { font-size: 1.05em; margin-top: 1.2em; }
+    table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: 0.95em; }
+    th, td { border: 1px solid #d0d7de; padding: 8px 12px; text-align: left; }
+    th { background: #f6f8fa; font-weight: 600; }
+    tr:nth-child(even) { background: #f6f8fa; }
+    code { background: #f0f2f4; padding: 2px 5px; border-radius: 3px; font-size: 0.9em; }
+    pre { background: #f6f8fa; padding: 1em; border-radius: 6px; overflow-x: auto; }
+    blockquote { border-left: 4px solid #d0d7de; margin: 1em 0; padding: 0.5em 1em; color: #57606a; background: #f6f8fa; }
+    hr { border: none; border-top: 2px solid #e1e4e8; margin: 2.5em 0; }
+    nav#TOC { background: #f6f8fa; padding: 1em 1.5em; border-radius: 6px; margin-bottom: 2em; }
+    nav#TOC > ul { margin: 0; }
+    nav#TOC a { text-decoration: none; color: #0969da; }
+    nav#TOC a:hover { text-decoration: underline; }
+    strong { color: #0a0a0a; }
+
+  </style>
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">ARC-AGI Reference</h1>
+</header>
+<nav id="TOC" role="doc-toc">
+<ul>
+<li><a href="#arc-agi-reference" id="toc-arc-agi-reference">ARC-AGI
+Reference</a>
+<ul>
+<li><a href="#theory-of-intelligence" id="toc-theory-of-intelligence">1.
+Theory of Intelligence</a>
+<ul>
+<li><a href="#definition" id="toc-definition">Definition</a></li>
+<li><a href="#skill-vs.-intelligence"
+id="toc-skill-vs.-intelligence">Skill vs. Intelligence</a></li>
+<li><a href="#spectrum-of-generalization"
+id="toc-spectrum-of-generalization">Spectrum of Generalization</a></li>
+<li><a href="#why-measuring-skill-alone-fails"
+id="toc-why-measuring-skill-alone-fails">Why Measuring Skill Alone
+Fails</a></li>
+<li><a href="#core-knowledge-priors" id="toc-core-knowledge-priors">Core
+Knowledge Priors</a></li>
+</ul></li>
+<li><a href="#the-arc-benchmark" id="toc-the-arc-benchmark">2. The ARC
+Benchmark</a>
+<ul>
+<li><a href="#format-unchanged-across-versions"
+id="toc-format-unchanged-across-versions">Format (Unchanged Across
+Versions)</a></li>
+<li><a href="#three-defining-characteristics"
+id="toc-three-defining-characteristics">Three Defining
+Characteristics</a></li>
+<li><a href="#dataset-versions" id="toc-dataset-versions">Dataset
+Versions</a></li>
+<li><a href="#what-makes-arc-agi-2-harder"
+id="toc-what-makes-arc-agi-2-harder">What Makes ARC-AGI-2
+Harder</a></li>
+</ul></li>
+<li><a href="#competition-history-state-of-the-art"
+id="toc-competition-history-state-of-the-art">3. Competition History
+&amp; State of the Art</a>
+<ul>
+<li><a href="#score-progression" id="toc-score-progression">Score
+Progression</a></li>
+<li><a href="#arc-agi-2-model-baselines-semi-private-may-2025"
+id="toc-arc-agi-2-model-baselines-semi-private-may-2025">ARC-AGI-2 Model
+Baselines (Semi-Private, May 2025)</a></li>
+<li><a href="#arc-prize-2025-winners"
+id="toc-arc-prize-2025-winners">ARC Prize 2025 Winners</a></li>
+</ul></li>
+<li><a href="#the-refinement-loop-dominant-2025-paradigm"
+id="toc-the-refinement-loop-dominant-2025-paradigm">4. The Refinement
+Loop (Dominant 2025 Paradigm)</a>
+<ul>
+<li><a href="#taxonomy" id="toc-taxonomy">Taxonomy</a></li>
+</ul></li>
+<li><a href="#knowledge-overfitting-contamination"
+id="toc-knowledge-overfitting-contamination">5. Knowledge Overfitting
+&amp; Contamination</a>
+<ul>
+<li><a href="#implications" id="toc-implications">Implications</a></li>
+</ul></li>
+<li><a href="#what-a-solution-looks-like"
+id="toc-what-a-solution-looks-like">6. What a Solution Looks Like</a>
+<ul>
+<li><a href="#chollets-original-vision-2019"
+id="toc-chollets-original-vision-2019">Chollet’s Original Vision
+(2019)</a></li>
+<li><a href="#what-actually-works-2025"
+id="toc-what-actually-works-2025">What Actually Works (2025)</a></li>
+<li><a href="#critical-assessment-of-current-state"
+id="toc-critical-assessment-of-current-state">Critical Assessment of
+Current State</a></li>
+<li><a href="#automatable-task-domains-2025"
+id="toc-automatable-task-domains-2025">Automatable Task Domains
+(2025)</a></li>
+</ul></li>
+<li><a href="#benchmark-design-principles"
+id="toc-benchmark-design-principles">7. Benchmark Design Principles</a>
+<ul>
+<li><a
+href="#requirements-for-an-ideal-intelligence-benchmark-chollet-2019"
+id="toc-requirements-for-an-ideal-intelligence-benchmark-chollet-2019">Requirements
+for an Ideal Intelligence Benchmark (Chollet 2019)</a></li>
+<li><a href="#arc-agi-2-task-selection-protocol"
+id="toc-arc-agi-2-task-selection-protocol">ARC-AGI-2 Task Selection
+Protocol</a></li>
+<li><a href="#the-adaptation-principle"
+id="toc-the-adaptation-principle">The Adaptation Principle</a></li>
+</ul></li>
+<li><a href="#key-numbers" id="toc-key-numbers">8. Key Numbers</a></li>
+</ul></li>
+</ul>
+</nav>
+<h1 id="arc-agi-reference">ARC-AGI Reference</h1>
+<p>Synthesized from three primary sources: - Chollet, “On the Measure of
+Intelligence” (2019) - Chollet et al., “ARC-AGI-2” (2025) - Chollet et
+al., “ARC Prize 2025 Technical Report” (2026)</p>
+<hr />
+<h2 id="theory-of-intelligence">1. Theory of Intelligence</h2>
+<h3 id="definition">Definition</h3>
+<p>Intelligence is <strong>skill-acquisition efficiency</strong> over a
+scope of tasks, with respect to priors, experience, and generalization
+difficulty.</p>
+<p>Formally, each task contributes:
+<code>E[skill * generalization_difficulty / (priors + experience)]</code>,
+averaged over all tasks in scope weighted by task value.</p>
+<p>Skill is the output artifact of intelligence. High skill is not high
+intelligence — unlimited priors or unlimited training data can buy
+arbitrary skill without generalization.</p>
+<h3 id="skill-vs.-intelligence">Skill vs. Intelligence</h3>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Concept</th>
+<th>What it is</th>
+<th>Property of</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Skill</td>
+<td>Probabilistic average of evaluation scores</td>
+<td>A skill program (artifact)</td>
+</tr>
+<tr>
+<td>Intelligence</td>
+<td>Rate of converting priors + experience into skill at novel
+tasks</td>
+<td>The system that generates skill programs</td>
+</tr>
+<tr>
+<td>Priors</td>
+<td>Relevant information embedded in the system at initialization</td>
+<td>System + task pair</td>
+</tr>
+<tr>
+<td>Experience</td>
+<td>Cumulative novel, relevant information from training</td>
+<td>System + task + curriculum</td>
+</tr>
+<tr>
+<td>Generalization difficulty</td>
+<td>Fraction of solution NOT explained by optimal training-time
+behavior</td>
+<td>Task + curriculum</td>
+</tr>
+</tbody>
+</table>
+<h3 id="spectrum-of-generalization">Spectrum of Generalization</h3>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Level</th>
+<th>Name</th>
+<th>Characterization</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>None</td>
+<td>No uncertainty, exhaustive enumeration</td>
+<td>Tic-tac-toe via minimax</td>
+</tr>
+<tr>
+<td>1</td>
+<td>Local (robustness)</td>
+<td>Known unknowns, single well-defined task</td>
+<td>Image classifier on held-out test set</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Broad (flexibility)</td>
+<td>Unknown unknowns, related task category</td>
+<td>L5 self-driving, domestic robots</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Extreme (generality)</td>
+<td>Unknown unknowns across unknown domains</td>
+<td>Human cognition</td>
+</tr>
+</tbody>
+</table>
+<p>AI history is a slow climb up this spectrum. ARC targets broad
+generalization.</p>
+<h3 id="why-measuring-skill-alone-fails">Why Measuring Skill Alone
+Fails</h3>
+<ul>
+<li>A locality-sensitive hash table has near-zero generalization but can
+achieve arbitrary skill given enough data.</li>
+<li>DeepBlue beat Kasparov but taught nothing about intelligence; the
+knowledge didn’t generalize.</li>
+<li>Both priors (hard-coded knowledge) and experience (more training
+data) can game any skill test.</li>
+<li>“The AI effect”: confusing the intelligence of researchers building
+a system with the intelligence of the system itself.</li>
+</ul>
+<h3 id="core-knowledge-priors">Core Knowledge Priors</h3>
+<p>From developmental psychology (Spelke &amp; Kinzler). Innate
+assumptions shared by all humans, acquired before age ~4:</p>
+<p><strong>a. Objectness &amp; elementary physics</strong> - Object
+cohesion: objects are continuous, connected, bounded wholes - Object
+persistence: objects don’t spontaneously appear/disappear - Contact:
+objects don’t act at a distance or interpenetrate</p>
+<p><strong>b. Agentness &amp; goal-directedness</strong> - Some objects
+are agents with intentions, pursuing goals efficiently - Agents act
+contingently and reciprocally</p>
+<p><strong>c. Natural numbers &amp; elementary arithmetic</strong> -
+Innate abstract number representations for small numbers - Counting,
+comparison, addition, subtraction - All quantities in ARC are &lt;
+~10</p>
+<p><strong>d. Elementary geometry &amp; topology</strong> - Distance,
+orientation, in/out containment - Lines, rectangular shapes, symmetries
+- Rotations, translations, scaling - Connectivity, containment,
+orthogonal projections</p>
+<p>These are the ONLY priors ARC assumes. No language, no acquired
+knowledge, no domain expertise.</p>
+<hr />
+<h2 id="the-arc-benchmark">2. The ARC Benchmark</h2>
+<h3 id="format-unchanged-across-versions">Format (Unchanged Across
+Versions)</h3>
+<ul>
+<li>Tasks defined as I/O pairs of grids</li>
+<li>Grids: 1x1 to 30x30, cells have one of 10 discrete values
+(colors)</li>
+<li>Each task has 2-5 demonstration pairs (median 3) and 1-3 test
+pairs</li>
+<li>Goal: infer the transformation rule from demos, apply to test
+inputs</li>
+<li>Scoring: binary exact match on full output grid</li>
+<li>2 attempts per test input (v1: 3 attempts)</li>
+</ul>
+<h3 id="three-defining-characteristics">Three Defining
+Characteristics</h3>
+<ol type="1">
+<li><strong>Resists memorization</strong>: every task is unique, each
+follows different underlying logic</li>
+<li><strong>Minimal prior knowledge</strong>: only Core Knowledge priors
+required, no specialized world knowledge or language</li>
+<li><strong>Feasible for humans</strong>: solvable by regular people
+without special training</li>
+</ol>
+<h3 id="dataset-versions">Dataset Versions</h3>
+<h4 id="arc-agi-1-2019">ARC-AGI-1 (2019)</h4>
+<table>
+<thead>
+<tr>
+<th>Subset</th>
+<th>Size</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Training</td>
+<td>400</td>
+</tr>
+<tr>
+<td>Public Evaluation</td>
+<td>400</td>
+</tr>
+<tr>
+<td>Private Evaluation</td>
+<td>200</td>
+</tr>
+</tbody>
+</table>
+<p>Known limitations: ~49% of private eval susceptible to brute-force
+program search (aggregate of all 2020 submissions); saturated below
+human-level (&gt;97% solvable by high-end humans); difficulty
+inconsistent across subsets; information leakage from 4 years of reusing
+same 100 private tasks.</p>
+<h4 id="arc-agi-2-2025">ARC-AGI-2 (2025)</h4>
+<table>
+<colgroup>
+<col style="width: 33%" />
+<col style="width: 33%" />
+<col style="width: 33%" />
+</colgroup>
+<thead>
+<tr>
+<th>Subset</th>
+<th>Size</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Public Training</td>
+<td>400</td>
+<td>Imported from v1, demonstrates format &amp; priors</td>
+</tr>
+<tr>
+<td>Semi-Private Eval</td>
+<td>120</td>
+<td>Intermediate leaderboard scoring</td>
+</tr>
+<tr>
+<td>Private Eval</td>
+<td>120</td>
+<td>Final competition scoring, fully private</td>
+</tr>
+</tbody>
+</table>
+<p>Design changes vs v1: - <strong>More unique</strong>: every task
+entirely novel - <strong>More complex</strong>: larger grids, more
+objects, more concepts per task - <strong>Less brute-forcible</strong>:
+intentionally resists exhaustive search - <strong>Calibrated
+difficulty</strong>: mean human accuracy differs &lt;= 1pp across
+partitions - <strong>Extensive human testing</strong>: 407 participants,
+13,405 attempts, 62% success rate</p>
+<h4 id="arc-agi-3-expected-early-2026">ARC-AGI-3 (Expected Early
+2026)</h4>
+<p>First major format change since 2019. Key differences: -
+<strong>Interactive environments</strong> instead of static I/O pairs -
+Tests <strong>agentic reasoning</strong>: exploration, planning, memory,
+goal acquisition, alignment - <strong>Efficiency metric</strong>: formal
+comparison of human and AI action efficiency (learning efficiency) -
+Hundreds of never-before-seen interactive environments</p>
+<h3 id="what-makes-arc-agi-2-harder">What Makes ARC-AGI-2 Harder</h3>
+<h4 id="compositional-generalization">Compositional Generalization</h4>
+<p>The core challenge of ARC-AGI-2. Four categories:</p>
+<p><strong>Multi-rule compositional reasoning</strong>: Multiple
+simultaneous interacting rules. Example: crop to rectangular frame,
+rescale colored objects, place into matching holes.</p>
+<p><strong>Multi-step compositional reasoning</strong>: Sequential rule
+application where step N depends on outcome of step N-1. Cannot predict
+step N+1 without executing prior steps. Example: iteratively placing
+objects where position/orientation depends on previous placements.</p>
+<p><strong>Contextual rule application</strong>: Core transformation
+modulated by contextual elements. A form of control flow. Example:
+isolating shapes and stacking them, but which side (left/right) depends
+on outline color.</p>
+<p><strong>In-context symbol definition</strong>: Objects whose meaning
+is defined within the task. Example: colored rectangles with N holes
+encode “use this color for shapes with N holes.” On-the-fly symbolic
+assignment is a major challenge for frontier AI.</p>
+<h4 id="human-testing-data">Human Testing Data</h4>
+<ul>
+<li>407 participants, diverse professional backgrounds</li>
+<li>Median solve time: 2.2 minutes for successful tasks</li>
+<li>No demographic factor (occupation, programming, math background)
+predicted performance</li>
+<li>Confirms tasks measure general problem-solving, not domain
+expertise</li>
+<li>100% of tasks solved by &gt;= 2 independent non-expert humans</li>
+</ul>
+<hr />
+<h2 id="competition-history-state-of-the-art">3. Competition History
+&amp; State of the Art</h2>
+<h3 id="score-progression">Score Progression</h3>
+<table>
+<colgroup>
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+<col style="width: 25%" />
+</colgroup>
+<thead>
+<tr>
+<th>Year</th>
+<th>Competition</th>
+<th>Top Score (Private)</th>
+<th>Key Method</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2020</td>
+<td>Kaggle ARC-AGI</td>
+<td>20%</td>
+<td>Brute-force program search (Icecuber)</td>
+</tr>
+<tr>
+<td>2022</td>
+<td>ARCathon 1</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>2023</td>
+<td>ARCathon 2</td>
+<td>—</td>
+<td>—</td>
+</tr>
+<tr>
+<td>2024</td>
+<td>ARC Prize 2024</td>
+<td>53.5% (ARChitects)</td>
+<td>Test-time adaptation (TTA)</td>
+</tr>
+<tr>
+<td>2024</td>
+<td>o3 preview (private)</td>
+<td>76-88%</td>
+<td>Massive test-time compute ($200-$20K/task)</td>
+</tr>
+<tr>
+<td>2025</td>
+<td>ARC Prize 2025 (v2)</td>
+<td>24.03% (NVARC)</td>
+<td>Test-time training + synthetic data</td>
+</tr>
+</tbody>
+</table>
+<h3 id="arc-agi-2-model-baselines-semi-private-may-2025">ARC-AGI-2 Model
+Baselines (Semi-Private, May 2025)</h3>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>ARC-AGI-1</th>
+<th>ARC-AGI-2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>o3-mini (High)</td>
+<td>34.5%</td>
+<td>3.0%</td>
+</tr>
+<tr>
+<td>o3 (Medium)</td>
+<td>53.0%</td>
+<td>3.0%</td>
+</tr>
+<tr>
+<td>ARChitects (2024)</td>
+<td>56.0%</td>
+<td>2.5%</td>
+</tr>
+<tr>
+<td>o4-mini (Medium)</td>
+<td>41.8%</td>
+<td>2.4%</td>
+</tr>
+<tr>
+<td>Icecuber (2020)</td>
+<td>17.0%</td>
+<td>1.6%</td>
+</tr>
+<tr>
+<td>o1-pro (Low)</td>
+<td>23.3%</td>
+<td>0.9%</td>
+</tr>
+<tr>
+<td>Claude 3.7 (8K)</td>
+<td>21.2%</td>
+<td>0.9%</td>
+</tr>
+</tbody>
+</table>
+<p>Below 5% on ARC-AGI-2 is generally noise. Signal emerges above
+5%.</p>
+<h3 id="arc-prize-2025-winners">ARC Prize 2025 Winners</h3>
+<p><strong>Top Scores (ARC-AGI-2 Private)</strong>: 1. NVARC (24.03%,
+$25k) — test-time training + synthetic data, builds on ARChitects 2024
+2. ARChitects (16.53%, $10k) — 2D-aware masked-diffusion LM, recursive
+self-refinement 3. MindsAI (12.64%, $5k) — test-time fine-tuning +
+augmentation ensembles + tokenizer dropout</p>
+<p><strong>Paper Awards</strong>: 1. TRM ($50k) — 7M-param recursive
+model, 45% v1 / 8% v2 2. SOAR ($20k) — self-improving evolutionary
+program synthesis, +52% on v1 3. CompressARC ($5k) — MDL-based 76K
+params, 20-34% v1 / 4% v2</p>
+<p><strong>Honorable Mentions</strong>: “ARC-AGI is a Vision Problem”,
+“Product of Experts with LLMs”, “Beyond Brute Force (neuro-symbolic)”,
+“Vector Symbolic Algebras”, “Evolutionary Test-Time Compute”, “Efficient
+Evolutionary Program Synthesis”, “ARC-NCA (developmental)”, “Exploring
+Search and Learn”</p>
+<hr />
+<h2 id="the-refinement-loop-dominant-2025-paradigm">4. The Refinement
+Loop (Dominant 2025 Paradigm)</h2>
+<p>At its core: iteratively transform one program or model version into
+a slightly better one, based on a feedback signal. This is the central
+theme driving AGI progress in 2025.</p>
+<h3 id="taxonomy">Taxonomy</h3>
+<h4 id="test-time-training-deep-learning">Test-Time Training (Deep
+Learning)</h4>
+<p>Refine pretrained model weights on examples of the specific task at
+test time. Responsible for top Kaggle scores in both 2024 and 2025. -
+NVARC: test-time training + synthetic data generation - ARChitects:
+2D-aware masked-diffusion with recursive self-refinement - MindsAI:
+test-time fine-tuning + augmentation ensembles</p>
+<h4 id="zero-pretraining-deep-learning">Zero-Pretraining Deep
+Learning</h4>
+<p>Train from scratch per task. No pretrained weights. Two key
+examples:</p>
+<p><strong>TRM (Tiny Recursive Model)</strong>: - 7M parameters, single
+network with separate answer (y) and latent (z) states - Process: embed
+input x and initial answer y, then for N_sup=16 steps: (i) update z
+given (x, y, z) for n iterations, (ii) update y given (y, z) -
+Recursively improves its prediction through the latent - No pretraining,
+no external dataset, no branching search — gradient descent only - 45%
+ARC-AGI-1, 8% ARC-AGI-2</p>
+<p><strong>CompressARC</strong>: - 76K parameters, follows MDL (Minimum
+Description Length) principle - VAE loss + decoder regularization
+substitutes for combinatorial search - No pretraining, one model per
+task, ~20 min per puzzle on RTX 4070 - 20-34% ARC-AGI-1, 4% ARC-AGI-2 -
+Architecture: equivariant base + symmetry-breaking layers (short-range
+spatial, long-range spatial, directional)</p>
+<h4 id="evolutionary-program-synthesis">Evolutionary Program
+Synthesis</h4>
+<p>Evolve ARC solution programs through an exploration-verification
+cycle: - <strong>Berman (Runner Up)</strong>: evolutionary search
+harness for natural-language programs - <strong>Pang (Runner
+Up)</strong>: similar but in Python, dynamically builds a program
+abstraction library - <strong>SOAR (2nd Place Paper)</strong>:
+self-improving LLM that fine-tunes on its own search traces, +52% on
+ARC-AGI-1 without human-engineered DSLs</p>
+<p>Both use two-phase refinement: (1) exploration generates candidates,
+(2) verification produces feedback signal. Repeats until a program
+satisfies all training I/O pairs.</p>
+<h4 id="test-time-chain-of-thought">Test-Time Chain-of-Thought</h4>
+<p>Commercial reasoning systems (o3, Gemini, Claude) use extended CoT as
+a natural-language refinement loop. Longer reasoning = more refinement
+cycles. Evidence of self-corrective behavior in reasoning traces.</p>
+<h4 id="model-refinement-harnesses-application-layer">Model Refinement
+Harnesses (Application Layer)</h4>
+<p>Domain-specific wrappers around commercial models: - Poetiq harness
+on Gemini 3 Pro: 31% → 54% on ARC-AGI-2 ($31/task) - Same on Claude Opus
+4.5: comparable gains (~$60/task) - Techniques like GEPA and DSPy enable
+general-purpose refinement given a verifier</p>
+<hr />
+<h2 id="knowledge-overfitting-contamination">5. Knowledge Overfitting
+&amp; Contamination</h2>
+<p>A new class of overfitting specific to AI reasoning systems:</p>
+<ul>
+<li>AI reasoning performance is fundamentally coupled to <strong>model
+knowledge coverage</strong></li>
+<li>Human reasoning is NOT similarly bound to knowledge — humans display
+extreme generalization</li>
+<li>This coupling leads to “jagged intelligence” — uneven performance
+across domains</li>
+<li>Even well-designed benchmarks with private test sets can be overfit
+if training and test distributions are similar and the model trains on
+substantial public domain data</li>
+<li>Evidence: Gemini 3 uses correct ARC color mappings in verification
+despite the harness never mentioning ARC formats — the model has
+internalized ARC structure from pretraining</li>
+<li>This is happening with both ARC-AGI-1 and ARC-AGI-2</li>
+</ul>
+<h3 id="implications">Implications</h3>
+<ul>
+<li>LLM-based approaches get “free” performance from contamination</li>
+<li>Pure program synthesis approaches (like Aria) are immune — genuine
+generalization, but no free performance</li>
+<li>Benchmark design must continually adapt (motivates ARC-AGI-3’s
+interactive format)</li>
+<li>Separating knowledge from reasoning remains an unsolved fundamental
+problem</li>
+</ul>
+<hr />
+<h2 id="what-a-solution-looks-like">6. What a Solution Looks Like</h2>
+<h3 id="chollets-original-vision-2019">Chollet’s Original Vision
+(2019)</h3>
+<ol type="1">
+<li>Build a <strong>DSL</strong> encoding Core Knowledge priors in
+sufficiently abstract, combinable form — “a human-like reasoning
+DSL”</li>
+<li><strong>Generate candidate programs</strong> that transform inputs
+to outputs</li>
+<li><strong>Reuse and recombine subprograms</strong> from prior
+solutions</li>
+<li><strong>Select top candidates</strong> by program simplicity or
+learned likelihood</li>
+<li>Apply top candidates to test inputs</li>
+</ol>
+<p>This is essentially a description of Aria’s architecture.</p>
+<h3 id="what-actually-works-2025">What Actually Works (2025)</h3>
+<p>The winning approaches have diverged from pure symbolic program
+synthesis:</p>
+<p><strong>Test-time training</strong> (top scores): neural networks
+that learn the transformation from I/O examples through gradient descent
+at inference time. Not symbolic programs — learned weights that
+implement the transformation.</p>
+<p><strong>Evolutionary program synthesis</strong> (strong papers):
+LLM-generated programs refined through evolution. Programs are in
+natural language or Python, not a hand-crafted DSL.</p>
+<p><strong>Zero-pretraining neural methods</strong> (paradigm-shifting):
+tiny networks trained from scratch per task prove that the program can
+be encoded in weights without any prior training.</p>
+<p><strong>Hybrid neuro-symbolic</strong> (honorable mentions):
+combining neural perception with symbolic reasoning.</p>
+<h3 id="critical-assessment-of-current-state">Critical Assessment of
+Current State</h3>
+<p>From the ARC Prize 2025 report: - Grand Prize accuracy gap (to 85%):
+primarily bottlenecked by <strong>engineering</strong> - Efficiency gap:
+bottlenecked by <strong>fundamental science and new ideas</strong> - “We
+still need new ideas, such as methods to separate knowledge and
+reasoning” - AGI test: “You’ll know AGI is here when creating tasks easy
+for humans but hard for AI becomes simply impossible” — not achieved
+yet</p>
+<h3 id="automatable-task-domains-2025">Automatable Task Domains
+(2025)</h3>
+<p>Tasks with BOTH properties are now reliably automatable: 1.
+Sufficient task knowledge coverage in pretraining corpus 2. The task
+provides a verifiable feedback signal</p>
+<p>ARC tasks satisfy (2) but deliberately violate (1) — each task is
+novel by design.</p>
+<hr />
+<h2 id="benchmark-design-principles">7. Benchmark Design Principles</h2>
+<h3
+id="requirements-for-an-ideal-intelligence-benchmark-chollet-2019">Requirements
+for an Ideal Intelligence Benchmark (Chollet 2019)</h3>
+<ol type="1">
+<li>Describe scope and establish <strong>validity</strong> (predictive
+of real-world performance)</li>
+<li>Be <strong>reliable</strong> (reproducible results)</li>
+<li>Measure <strong>broad abilities</strong> and <strong>developer-aware
+generalization</strong> (not just skill)</li>
+<li>Feature tasks <strong>unknown</strong> to both system and
+developers</li>
+<li><strong>Quantify generalization difficulty</strong> (or at least
+characterize it)</li>
+<li><strong>Control for experience</strong> (no unlimited training
+data)</li>
+<li><strong>Explicitly describe assumed priors</strong></li>
+<li><strong>Work fairly</strong> for both humans and machines (Core
+Knowledge priors only)</li>
+</ol>
+<h3 id="arc-agi-2-task-selection-protocol">ARC-AGI-2 Task Selection
+Protocol</h3>
+<ol type="1">
+<li>Source: newly authored tasks + unused reserves from prior
+iterations</li>
+<li>Human testing: advance only if &gt;= 2 independent participants
+solve &gt;= 1 sub-pair in first 2 attempts</li>
+<li>Difficulty calibration: group tasks so mean human accuracy differs
+&lt;= 1pp across partitions</li>
+<li>Redundancy detection: flag tasks where one programmatic solution
+would solve both</li>
+<li>Final validation: two-layer (external testers + internal
+review)</li>
+</ol>
+<h3 id="the-adaptation-principle">The Adaptation Principle</h3>
+<blockquote>
+<p>The critical concept is <em>adaptation</em>. Adaptation represents
+the core mode of intelligence. This process extends beyond creating
+effective benchmarks — it constitutes the ultimate measure of general
+intelligence itself.</p>
+</blockquote>
+<p>Benchmarks must continually adapt in response to AI progress.
+ARC-AGI-1 → ARC-AGI-2 → ARC-AGI-3 is this principle in action.</p>
+<hr />
+<h2 id="key-numbers">8. Key Numbers</h2>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ARC-AGI-1 training tasks</td>
+<td>400</td>
+</tr>
+<tr>
+<td>ARC-AGI-1 eval tasks</td>
+<td>600 (400 public + 200 private)</td>
+</tr>
+<tr>
+<td>ARC-AGI-2 eval tasks</td>
+<td>240 (120 semi-private + 120 private)</td>
+</tr>
+<tr>
+<td>Grid size range</td>
+<td>1x1 to 30x30</td>
+</tr>
+<tr>
+<td>Color values</td>
+<td>10 (0-9)</td>
+</tr>
+<tr>
+<td>Demo pairs per task</td>
+<td>2-5 (median 3)</td>
+</tr>
+<tr>
+<td>Test pairs per task</td>
+<td>1-3 (68% have 1)</td>
+</tr>
+<tr>
+<td>Attempts per test input</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Human median solve time (v2)</td>
+<td>2.2 minutes</td>
+</tr>
+<tr>
+<td>Human success rate (v2)</td>
+<td>75% per task, 66% per test pair</td>
+</tr>
+<tr>
+<td>Top AI score on v2 private</td>
+<td>24.03% (NVARC, Nov 2025)</td>
+</tr>
+<tr>
+<td>ARC Prize Grand Prize threshold</td>
+<td>&gt;= 85% on v2 private eval</td>
+</tr>
+<tr>
+<td>Grand Prize purse</td>
+<td>$700,000</td>
+</tr>
+<tr>
+<td>TRM parameters</td>
+<td>7M</td>
+</tr>
+<tr>
+<td>CompressARC parameters</td>
+<td>76K</td>
+</tr>
+</tbody>
+</table>
+</body>
+</html>

@@ -433,6 +433,41 @@ register("fill_between", OpSignature(
     params=(("grid", Type.GRID), ("color", Type.COLOR), ("fill_color", Type.COLOR)),
     return_type=Type.GRID), _fill_between)
 
+
+def _fill_between_v(grid: Grid, color: int, fill_color: int) -> Grid:
+    """Fill cells vertically between two cells of `color` with `fill_color`."""
+    result = grid.copy()
+    rows, cols = grid.shape
+    for c in range(cols):
+        positions = [r for r in range(rows) if grid[r, c] == color]
+        if len(positions) >= 2:
+            for r in range(positions[0] + 1, positions[-1]):
+                if result[r, c] != color:
+                    result[r, c] = fill_color
+    return result
+
+
+def _fill_between_h(grid: Grid, color: int, fill_color: int) -> Grid:
+    """Fill cells horizontally between two cells of `color` with `fill_color`."""
+    result = grid.copy()
+    rows, cols = grid.shape
+    for r in range(rows):
+        positions = [c for c in range(cols) if grid[r, c] == color]
+        if len(positions) >= 2:
+            for c in range(positions[0] + 1, positions[-1]):
+                if result[r, c] != color:
+                    result[r, c] = fill_color
+    return result
+
+
+register("fill_between_v", OpSignature(
+    params=(("grid", Type.GRID), ("color", Type.COLOR), ("fill_color", Type.COLOR)),
+    return_type=Type.GRID), _fill_between_v)
+
+register("fill_between_h", OpSignature(
+    params=(("grid", Type.GRID), ("color", Type.COLOR), ("fill_color", Type.COLOR)),
+    return_type=Type.GRID), _fill_between_h)
+
 register("propagate", OpSignature(
     params=(("grid", Type.GRID), ("source_color", Type.COLOR),
             ("fill_color", Type.COLOR), ("bg_color", Type.COLOR)),

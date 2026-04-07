@@ -12,6 +12,7 @@ from aria.types import (
     Bind,
     Call,
     Expr,
+    ForEach,
     Lambda,
     Literal,
     Program,
@@ -248,6 +249,32 @@ def type_check(
             inferred = _infer_expr(step.pred, env, errors, loc)
             if inferred is not None and inferred != Type.BOOL:
                 errors.append(f"{loc}: assert expects BOOL, got {inferred.name}")
+
+        elif isinstance(step, ForEach):
+            loc = f"step {idx} (for_each)"
+            # Check source type
+            src_type = _infer_expr(step.source, env, errors, loc)
+            if src_type is not None and src_type not in (Type.OBJECT_SET, Type.OBJECT_LIST):
+                errors.append(f"{loc}: source must be OBJECT_SET/OBJECT_LIST, got {src_type.name}")
+            # Check accumulator exists and is GRID
+            if step.accumulator not in env:
+                errors.append(f"{loc}: accumulator '{step.accumulator}' not bound")
+            elif env[step.accumulator] != Type.GRID:
+                errors.append(f"{loc}: accumulator must be GRID")
+            # Type-check body in inner env
+            inner_env = dict(env)
+            inner_env[step.iter_name] = Type.OBJECT
+            for bi, body_step in enumerate(step.body):
+                bloc = f"{loc} body[{bi}]"
+                if isinstance(body_step, Bind):
+                    inferred = _infer_expr(body_step.expr, inner_env, errors, bloc)
+                    inner_env[body_step.name] = inferred if inferred is not None else body_step.typ
+                elif isinstance(body_step, Assert):
+                    inferred = _infer_expr(body_step.pred, inner_env, errors, bloc)
+                    if inferred is not None and inferred != Type.BOOL:
+                        errors.append(f"{bloc}: assert expects BOOL, got {inferred.name}")
+            # Output binding
+            env[step.output_name] = Type.GRID
 
         else:
             errors.append(f"step {idx}: unknown step kind {type(step).__name__}")

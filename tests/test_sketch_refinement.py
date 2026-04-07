@@ -144,16 +144,13 @@ def test_sketch_refinement_composite_not_promoted():
     assert result.sketch_verified >= 1
 
 
-def test_sketch_refinement_periodic_compile_failure():
-    """Periodic repair should produce a compile failure, not a solve."""
+def test_sketch_refinement_periodic_solves():
+    """Periodic repair should compile to a task-level solve."""
     demos = _framed_periodic_task()
     result = _run_sketch_refinement(demos)
-    assert result.solved is False
-    assert result.sketch_compile_failures >= 1
-    # Should have the CompileFailure in compile_results
-    failures = [r for r in result.compile_results if isinstance(r, CompileFailure)]
-    assert len(failures) >= 1
-    assert "repair_periodic" in failures[0].missing_ops
+    assert result.solved is True
+    assert result.winning_program is not None
+    assert result.winning_family == "framed_periodic_repair"
 
 
 def test_sketch_refinement_reports_budget():
@@ -223,20 +220,19 @@ def test_refinement_sketch_composite_falls_through():
     assert result.candidates_tried > result.sketch_result.sketch_budget_used
 
 
-def test_refinement_sketch_periodic_falls_through():
-    """Periodic task: sketch compile fails, legacy phases still run.
-    Note: the task may be solved by search, but sketch_result should still
-    be populated because the sketch phase runs before search."""
+def test_refinement_sketch_periodic_solves_via_sketch():
+    """Periodic task: sketch compiles and solves — no legacy search needed."""
     demos = _framed_periodic_task()
     result = run_refinement_loop(
         demos, Library(),
         max_steps=1, max_candidates=50, max_rounds=1,
     )
-    # Sketch phase ran before search
+    assert result.solved is True
     assert result.sketch_result is not None
-    assert result.sketch_result.sketch_compile_failures >= 1
-    # Total candidates should include both sketch budget and search budget
-    assert result.candidates_tried >= result.sketch_result.sketch_budget_used
+    assert result.sketch_result.solved is True
+    assert result.sketch_result.winning_family == "framed_periodic_repair"
+    # No search rounds should have run (solved before search)
+    assert len(result.rounds) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -257,3 +253,111 @@ def test_sketch_result_fields():
     assert isinstance(result.sketch_candidates_executed, int)
     assert isinstance(result.solved, bool)
     assert isinstance(result.compile_results, tuple)
+
+
+# ---------------------------------------------------------------------------
+# Graph-native compilation in solver loop
+# ---------------------------------------------------------------------------
+
+
+def test_periodic_uses_graph_native_path():
+    """Periodic task should compile via graph-native path, not fallback."""
+    demos = _framed_periodic_task()
+    result = _run_sketch_refinement(demos)
+    assert result.solved is True
+    assert result.graph_native_attempted >= 1
+    assert result.graph_native_compiled >= 1
+    assert result.graph_native_verified >= 1
+    assert result.solve_path == "graph_native"
+    assert result.fallback_used == 0
+
+
+def test_composite_uses_graph_native_path():
+    """Composite alignment should compile via graph-native path."""
+    demos = _composite_alignment_task()
+    result = _run_sketch_refinement(demos)
+    assert result.graph_native_attempted >= 1
+    assert result.graph_native_compiled >= 1
+    # Per-demo programs should be verified via graph-native
+    assert result.graph_native_verified >= 1
+    assert result.fallback_used == 0
+
+
+def test_identity_reports_no_graph_native():
+    """Identity task: no sketches proposed, no graph-native attempts."""
+    demos = _identity_task()
+    result = _run_sketch_refinement(demos)
+    assert result.graph_native_attempted == 0
+    assert result.graph_native_compiled == 0
+    assert result.fallback_used == 0
+    assert result.solve_path == "none"
+
+
+def test_solve_path_is_graph_native_for_periodic():
+    """When periodic solves, solve_path should be 'graph_native'."""
+    demos = _framed_periodic_task()
+    result = _run_sketch_refinement(demos)
+    assert result.solve_path == "graph_native"
+
+
+def test_graph_native_result_in_full_refinement():
+    """Graph-native reporting propagates through full refinement loop."""
+    demos = _framed_periodic_task()
+    result = run_refinement_loop(
+        demos, Library(),
+        max_steps=1, max_candidates=50, max_rounds=1,
+    )
+    assert result.solved is True
+    assert result.sketch_result is not None
+    assert result.sketch_result.solve_path == "graph_native"
+    assert result.sketch_result.graph_native_compiled >= 1
+
+
+def _tile_task():
+    """Canvas task: tile 2x2 grid 2x2."""
+    return (
+        DemoPair(
+            input=grid_from_list([[1, 2], [3, 4]]),
+            output=grid_from_list([
+                [1, 2, 1, 2], [3, 4, 3, 4],
+                [1, 2, 1, 2], [3, 4, 3, 4],
+            ]),
+        ),
+        DemoPair(
+            input=grid_from_list([[5, 6], [7, 8]]),
+            output=grid_from_list([
+                [5, 6, 5, 6], [7, 8, 7, 8],
+                [5, 6, 5, 6], [7, 8, 7, 8],
+            ]),
+        ),
+    )
+
+
+def test_canvas_uses_graph_native_in_solver():
+    """Canvas construction should compile via graph-native path in the solver loop."""
+    demos = _tile_task()
+    result = _run_sketch_refinement(demos)
+    assert result.solved is True
+    assert result.graph_native_attempted >= 1
+    assert result.graph_native_compiled >= 1
+    assert result.graph_native_verified >= 1
+    assert result.solve_path == "graph_native"
+    assert result.fallback_used == 0
+
+
+def test_canvas_solves_in_full_refinement():
+    """Canvas task solves through the full refinement loop.
+
+    Note: the legacy dims-change path may solve this before the sketch
+    phase runs, in which case sketch_result will be None. Either way,
+    the task is solved.
+    """
+    demos = _tile_task()
+    result = run_refinement_loop(
+        demos, Library(),
+        max_steps=1, max_candidates=50, max_rounds=1,
+    )
+    assert result.solved is True
+    # If sketch phase ran, it should use graph-native
+    if result.sketch_result is not None and result.sketch_result.solved:
+        assert result.sketch_result.solve_path == "graph_native"

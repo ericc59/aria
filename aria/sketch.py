@@ -1,18 +1,22 @@
-"""Sketch IR — task-local hypotheses before concrete programs.
+"""Sketch IR — graph-shaped hypothesis representation.
 
-A Sketch sits between raw observation and an executable Program.
-It expresses *what kind of computation* would solve a task without
-committing to specific ops or literal constants.
+Core types for the generalized compilation pipeline:
+
+  SketchGraph    — DAG of SketchNodes (primitive ops with typed edges)
+  Specialization — resolved static task structure (axis, period, roles, …)
+  ResolvedBinding — one slot/role pinned to a concrete value
+
+The linear Sketch/SketchStep types are retained for backward compatibility
+and serialization; SketchGraph.from_sketch() converts between them.
+
+A sketch is NOT executable.  It is compiled to a Program via:
+  fit → SketchGraph → specialize → compile_sketch_graph → verify
 
 Key properties:
 - Role variables instead of literal colors (supports color rotation)
-- Typed parameter slots that a lightweight solver can fill
-- Compositional: multiple SketchSteps interact via shared bindings
-- Contextual: transforms gated by predicates over roles/relations
-- Small: a Sketch is 2-6 steps, not a search space
-
-A Sketch is NOT executable. It is compiled to a Program (or a small
-set of candidate Programs) by a separate sketch compiler.
+- Typed parameter slots resolved by the specialization pass
+- Graph-shaped: nodes reference predecessors via explicit edges
+- Small: a sketch is 2–6 nodes, not a search space
 """
 
 from __future__ import annotations
@@ -90,47 +94,77 @@ class Slot:
 # ---------------------------------------------------------------------------
 
 
-class PrimitiveFamily(Enum):
-    """Families of sketch primitives.
+class Primitive(Enum):
+    """Sketch primitives — the atoms of graph-shaped hypotheses.
 
-    Each family is a *class* of computation, not a single op.
+    Each primitive is a single, reusable operation type.  A sketch graph
+    composes a small number of these into a DAG that describes the shape
+    of the solution without committing to runtime ops or literal constants.
     """
-    # Perception / decomposition
-    IDENTIFY_ROLES = auto()           # assign bg/fg/frame/anchor roles
-    EXTRACT_REGION = auto()           # crop a sub-grid by role or bbox
-    FIND_OBJECTS = auto()             # connected component extraction
-    FIND_COMPOSITES = auto()          # group CCs into composite motifs
+    # Perception
+    BIND_ROLE = auto()            # assign structural roles (bg/fg/frame/anchor)
+    EXTRACT_VIEW = auto()         # extract a decomposition view (framed regions, composites, objects)
+    SELECT_REGION = auto()        # select a specific region/sub-grid
+    SELECT_SUBSET = auto()        # filter objects/regions by predicate
+    PEEL_FRAME = auto()           # strip outermost frame border
+    PARTITION_GRID = auto()       # split grid into sub-cells by separators
 
-    # Same-dims transforms
-    REGION_PERIODIC_REPAIR = auto()   # detect period in region, fix deviations
-    OBJECT_MOVE_BY_RELATION = auto()  # move objects based on relational predicate
-    COMPOSITE_ROLE_ALIGNMENT = auto() # align composite motifs to anchor axis
-    RECOLOR_BY_CONTEXT = auto()       # recolor objects based on spatial context
-    FILL_BY_RULE = auto()             # fill region/boundary with rule-derived color
+    # Analysis
+    INFER_REGULARITY = auto()     # detect pattern/period/symmetry in content
+    INFER_MOTIF = auto()          # infer repeating unit from 1D line
+    APPLY_RELATION = auto()       # compute relation between objects/regions (alignment, distance)
+    DETECT_MISMATCH = auto()      # identify cells violating a regularity
 
-    # Dims-change construction
-    CANVAS_LAYOUT = auto()            # determine output dims + populate canvas
-    EXTRACT_AND_PACK = auto()         # select sub-regions, pack into output
-    TILE_EXPAND = auto()              # expand input by tiling/fractal rule
+    # Transforms
+    APPLY_TRANSFORM = auto()      # apply a transform to selected objects/grid
+    REPAIR_MISMATCH = auto()      # fix cells that violate inferred regularity
+    REPAIR_LINES = auto()         # infer motif + repair mismatches per line
+    REPAIR_2D_MOTIF = auto()      # infer 2D tile motif + repair mismatches per cell
 
-    # Composition
-    COMPOSE_SEQUENTIAL = auto()       # chain sub-sketches in order
-    FOR_EACH_OBJECT = auto()          # apply sub-sketch per object
-    FOR_EACH_REGION = auto()          # apply sub-sketch per region/zone
+    # Construction
+    CONSTRUCT_CANVAS = auto()     # create output grid with computed dimensions
+    PAINT = auto()                # render objects/content onto a grid
+    COMPOSE = auto()              # combine multiple sub-results sequentially
+
+    # Iteration
+    FOR_EACH = auto()             # apply sub-operation to each element
+
+
+# Backward compatibility — legacy code may reference PrimitiveFamily
+PrimitiveFamily = Primitive
+
+# Legacy aliases: old lane-specific names → generic primitives.
+# Retained so existing serialized sketches and tests keep working.
+Primitive.IDENTIFY_ROLES = Primitive.BIND_ROLE
+Primitive.EXTRACT_REGION = Primitive.SELECT_REGION
+Primitive.FIND_OBJECTS = Primitive.EXTRACT_VIEW
+Primitive.FIND_COMPOSITES = Primitive.EXTRACT_VIEW
+Primitive.REGION_PERIODIC_REPAIR = Primitive.REPAIR_MISMATCH
+Primitive.OBJECT_MOVE_BY_RELATION = Primitive.APPLY_TRANSFORM
+Primitive.COMPOSITE_ROLE_ALIGNMENT = Primitive.APPLY_RELATION
+Primitive.RECOLOR_BY_CONTEXT = Primitive.APPLY_TRANSFORM
+Primitive.FILL_BY_RULE = Primitive.APPLY_TRANSFORM
+Primitive.CANVAS_LAYOUT = Primitive.CONSTRUCT_CANVAS
+Primitive.EXTRACT_AND_PACK = Primitive.SELECT_REGION
+Primitive.TILE_EXPAND = Primitive.APPLY_TRANSFORM
+Primitive.COMPOSE_SEQUENTIAL = Primitive.COMPOSE
+Primitive.FOR_EACH_OBJECT = Primitive.FOR_EACH
+Primitive.FOR_EACH_REGION = Primitive.FOR_EACH
 
 
 # ---------------------------------------------------------------------------
-# Sketch steps and full Sketch
+# Sketch steps and full Sketch (linear form — see SketchGraph for DAG form)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class SketchStep:
-    """One step in a sketch — a primitive applied with roles and slots.
+    """One node in the linear sketch representation.
 
-    A step says *what* to do (primitive family) and *with what parameters*
-    (roles for symbolic bindings, slots for values to infer), but not
-    *how* to do it (that's the compiler's job).
+    Describes *what* to do (primitive) and *with what parameters*
+    (roles for symbolic bindings, slots for values to infer).
+    Prefer SketchNode / SketchGraph for new code; SketchStep is
+    retained for serialization and backward compatibility.
     """
     name: str                                # binding name, e.g. "s1"
     primitive: PrimitiveFamily
@@ -156,14 +190,10 @@ class SketchStep:
 
 @dataclass(frozen=True)
 class Sketch:
-    """A task-local hypothesis: a small sequence of typed sketch steps.
+    """Linear sketch representation (ordered list of SketchSteps).
 
-    A Sketch is the system's best guess at the *shape* of the solution
-    before committing to concrete ops, literals, or search. It is:
-    - 2-6 steps (compact)
-    - role-normalized (no literal colors unless evidence is strong)
-    - parameter-slotted (values inferred from demos, not hardcoded)
-    - compositional (steps reference each other)
+    This is the serialization-friendly form produced by fitters.
+    For compilation, convert to SketchGraph via SketchGraph.from_sketch().
     """
     task_id: str
     steps: tuple[SketchStep, ...]
@@ -173,8 +203,13 @@ class Sketch:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def primitive_families(self) -> tuple[PrimitiveFamily, ...]:
+    def primitive_families(self) -> tuple[Primitive, ...]:
         return tuple(s.primitive for s in self.steps)
+
+    @property
+    def primitive_pattern(self) -> tuple[str, ...]:
+        """Structural pattern of primitives (for compiler dispatch)."""
+        return tuple(s.primitive.name for s in self.steps)
 
     @property
     def role_vars(self) -> tuple[RoleVar, ...]:
@@ -449,3 +484,178 @@ def make_canvas_layout(
         slots=tuple(slots),
         description="construct output canvas with inferred dimensions and layout",
     )
+
+
+# ---------------------------------------------------------------------------
+# Graph-shaped sketch IR
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SketchNode:
+    """A node in a sketch dependency graph.
+
+    Unlike SketchStep, a SketchNode has an explicit node id, typed
+    input/output edges, and is designed for graph traversal rather than
+    sequential reading.
+    """
+    id: str                                  # unique within the graph
+    primitive: Primitive
+    inputs: tuple[str, ...] = ()             # ids of nodes this depends on
+    output_type: SlotType | None = None      # what this node produces
+    roles: tuple[RoleVar, ...] = ()
+    slots: tuple[Slot, ...] = ()
+    description: str = ""
+    evidence: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class SketchGraph:
+    """A sketch represented as an explicit dependency graph (DAG).
+
+    Nodes are primitive operations; edges are data dependencies.
+    The graph makes dependencies inspectable and supports topological
+    traversal, subgraph extraction, and specialization passes.
+    """
+    task_id: str
+    nodes: dict[str, SketchNode]             # id -> node
+    output_id: str                           # which node produces the final result
+    description: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def topo_order(self) -> tuple[str, ...]:
+        """Topological sort of node ids (inputs before dependents)."""
+        visited: set[str] = set()
+        order: list[str] = []
+
+        def _visit(nid: str) -> None:
+            if nid in visited:
+                return
+            visited.add(nid)
+            node = self.nodes.get(nid)
+            if node is None:
+                return
+            for dep in node.inputs:
+                _visit(dep)
+            order.append(nid)
+
+        for nid in self.nodes:
+            _visit(nid)
+        return tuple(order)
+
+    def predecessors(self, node_id: str) -> tuple[str, ...]:
+        """Direct input dependencies of a node."""
+        node = self.nodes.get(node_id)
+        return node.inputs if node else ()
+
+    def successors(self, node_id: str) -> tuple[str, ...]:
+        """Nodes that depend on *node_id*."""
+        return tuple(
+            nid for nid, n in self.nodes.items()
+            if node_id in n.inputs
+        )
+
+    def validate(self) -> list[str]:
+        """Structural validation — returns list of issues (empty = valid)."""
+        errors: list[str] = []
+        ids = set(self.nodes.keys())
+        for nid, node in self.nodes.items():
+            for dep in node.inputs:
+                if dep != "input" and dep not in ids:
+                    errors.append(f"node {nid} depends on undefined {dep}")
+        if self.output_id not in ids and self.output_id != "input":
+            errors.append(f"output_id {self.output_id} not in graph")
+        # Check for cycles
+        try:
+            self.topo_order()
+        except RecursionError:
+            errors.append("graph contains a cycle")
+        return errors
+
+    @staticmethod
+    def from_sketch(sketch: Sketch) -> SketchGraph:
+        """Convert a linear Sketch into a SketchGraph."""
+        nodes: dict[str, SketchNode] = {}
+        for step in sketch.steps:
+            nodes[step.name] = SketchNode(
+                id=step.name,
+                primitive=step.primitive,
+                inputs=step.input_refs if step.input_refs else ("input",),
+                roles=step.roles,
+                slots=step.slots,
+                description=step.description,
+                evidence=dict(step.evidence),
+            )
+        return SketchGraph(
+            task_id=sketch.task_id,
+            nodes=nodes,
+            output_id=sketch.output_ref,
+            description=sketch.description,
+            metadata=dict(sketch.metadata),
+        )
+
+    def to_sketch(self) -> Sketch:
+        """Convert back to a linear Sketch (topo-ordered steps)."""
+        ordered = self.topo_order()
+        steps: list[SketchStep] = []
+        for nid in ordered:
+            node = self.nodes[nid]
+            steps.append(SketchStep(
+                name=node.id,
+                primitive=node.primitive,
+                roles=node.roles,
+                slots=node.slots,
+                input_refs=node.inputs,
+                description=node.description,
+                evidence=node.evidence,
+            ))
+        return Sketch(
+            task_id=self.task_id,
+            steps=tuple(steps),
+            output_ref=self.output_id,
+            description=self.description,
+            metadata=dict(self.metadata),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Specialization — resolved static task structure
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ResolvedBinding:
+    """A single resolved static binding: a slot or role pinned to a value."""
+    node_id: str          # which graph node this binding applies to
+    name: str             # slot or role name
+    value: Any            # resolved value (int, str, tuple, etc.)
+    source: str = ""      # how it was resolved: "evidence", "consensus", "inferred"
+
+
+@dataclass(frozen=True)
+class Specialization:
+    """Static task structure extracted from demo evidence.
+
+    This is the symbolic analogue of "baking static structure into weights."
+    It captures everything that is constant across demos so that
+    compilation can use concrete values instead of re-inferring them.
+    """
+    task_id: str
+    bindings: tuple[ResolvedBinding, ...]     # resolved slot/role values
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def get(self, node_id: str, name: str) -> Any | None:
+        """Look up a resolved binding by node and name."""
+        for b in self.bindings:
+            if b.node_id == node_id and b.name == name:
+                return b.value
+        return None
+
+    def bindings_for_node(self, node_id: str) -> tuple[ResolvedBinding, ...]:
+        """All bindings that apply to a specific graph node."""
+        return tuple(b for b in self.bindings if b.node_id == node_id)
+
+    @property
+    def binding_names(self) -> frozenset[str]:
+        """All bound names across all nodes."""
+        return frozenset(b.name for b in self.bindings)

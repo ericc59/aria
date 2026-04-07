@@ -30,7 +30,7 @@ class EvalConfig:
 
     retrieval_limit: int = 0
     max_search_steps: int = 3
-    max_search_candidates: int = 5000
+    max_search_candidates: int = 20000
     max_refinement_rounds: int = 2
     include_core_ops: bool = True
     beam_width: int = 0

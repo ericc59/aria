@@ -82,6 +82,27 @@ def _by_size(size: int) -> Callable[[ObjectNode], bool]:
     return pred
 
 
+def _by_min_size(threshold: int) -> Callable[[ObjectNode], bool]:
+    """Return a predicate that tests for size > threshold.
+
+    Useful for separating multi-pixel shapes from single-pixel markers.
+    by_min_size(1) selects objects with size >= 2 (shapes).
+    """
+    def pred(obj: ObjectNode) -> bool:
+        return obj.size > threshold
+    return pred
+
+
+def _by_max_size(threshold: int) -> Callable[[ObjectNode], bool]:
+    """Return a predicate that tests for size <= threshold.
+
+    by_max_size(1) selects single-pixel markers.
+    """
+    def pred(obj: ObjectNode) -> bool:
+        return obj.size <= threshold
+    return pred
+
+
 def _by_size_rank(rank: int, objects: set[ObjectNode]) -> ObjectNode:
     """Return the object at the given size rank.
 
@@ -189,6 +210,69 @@ def _nearest_to(target: ObjectNode, objects: set[ObjectNode] | list[ObjectNode])
     )
 
 
+def _touching(target: ObjectNode, objects: set[ObjectNode] | list[ObjectNode]) -> ObjectNode:
+    """Return the object from *objects* whose cells are 4-adjacent to *target*.
+
+    "Adjacent" means sharing a border (not diagonal).  If multiple candidates
+    touch, the one with the smallest Manhattan distance between centers wins.
+    If none touch, falls back to nearest_to.
+    """
+    import numpy as np
+
+    if isinstance(objects, set):
+        candidates = sorted(objects, key=lambda obj: obj.id)
+    else:
+        candidates = list(objects)
+
+    filtered = [obj for obj in candidates if obj.id != target.id]
+    if not filtered:
+        raise ValueError("touching: no distinct candidate objects")
+
+    # Build the set of cells occupied by target (absolute coords)
+    target_cells: set[tuple[int, int]] = set()
+    bx, by, bw, bh = target.bbox
+    for dr in range(bh):
+        for dc in range(bw):
+            if target.mask[dr, dc]:
+                target_cells.add((bx + dr, by + dc))
+
+    # Build the 4-neighbor border of target
+    border: set[tuple[int, int]] = set()
+    for r, c in target_cells:
+        for nr, nc in ((r - 1, c), (r + 1, c), (r, c - 1), (r, c + 1)):
+            if (nr, nc) not in target_cells:
+                border.add((nr, nc))
+
+    # Check which candidates overlap the border
+    touching_candidates: list[ObjectNode] = []
+    for cand in filtered:
+        cx, cy, cw, ch = cand.bbox
+        for dr in range(ch):
+            for dc in range(cw):
+                if cand.mask[dr, dc] and (cx + dr, cy + dc) in border:
+                    touching_candidates.append(cand)
+                    break
+            else:
+                continue
+            break
+
+    if touching_candidates:
+        # Among touching, pick closest by center distance
+        tx = bx + bh // 2
+        ty = by + bw // 2
+        return min(
+            touching_candidates,
+            key=lambda obj: (
+                abs((obj.bbox[0] + obj.bbox[3] // 2) - tx)
+                + abs((obj.bbox[1] + obj.bbox[2] // 2) - ty),
+                obj.id,
+            ),
+        )
+
+    # Fallback: nearest by center distance
+    return _nearest_to(target, filtered)
+
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -224,6 +308,18 @@ register(
     "by_size",
     OpSignature(params=(("size", Type.INT),), return_type=Type.PREDICATE),
     _by_size,
+)
+
+register(
+    "by_min_size",
+    OpSignature(params=(("threshold", Type.INT),), return_type=Type.PREDICATE),
+    _by_min_size,
+)
+
+register(
+    "by_max_size",
+    OpSignature(params=(("threshold", Type.INT),), return_type=Type.PREDICATE),
+    _by_max_size,
 )
 
 register(
@@ -296,4 +392,13 @@ register(
         return_type=Type.OBJECT,
     ),
     _nearest_to,
+)
+
+register(
+    "touching",
+    OpSignature(
+        params=(("target", Type.OBJECT), ("candidates", Type.OBJECT_SET)),
+        return_type=Type.OBJECT,
+    ),
+    _touching,
 )

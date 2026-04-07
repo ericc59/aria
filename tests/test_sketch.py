@@ -5,13 +5,18 @@ from __future__ import annotations
 import json
 
 from aria.sketch import (
+    Primitive,
     PrimitiveFamily,
+    ResolvedBinding,
     RoleKind,
     RoleVar,
     Sketch,
+    SketchGraph,
+    SketchNode,
     SketchStep,
     Slot,
     SlotType,
+    Specialization,
     make_canvas_layout,
     make_composite_role_alignment,
     make_identify_roles,
@@ -155,6 +160,26 @@ def test_open_slots_collected():
     assert "period" in slot_names
 
 
+def test_primitive_pattern():
+    """primitive_pattern should return generic primitive names."""
+    from aria.sketch import Primitive
+    s = _periodic_repair_sketch()
+    pattern = s.primitive_pattern
+    # Should use generic primitive names, not old family names
+    assert "BIND_ROLE" in pattern
+    assert "REPAIR_MISMATCH" in pattern
+    # Old family names should NOT appear in the pattern
+    assert "REGION_PERIODIC_REPAIR" not in pattern
+    assert "IDENTIFY_ROLES" not in pattern
+
+
+def test_primitive_pattern_composite():
+    """Composite alignment sketch has APPLY_RELATION in its pattern."""
+    s = _composite_alignment_sketch()
+    pattern = s.primitive_pattern
+    assert "APPLY_RELATION" in pattern
+
+
 # ---------------------------------------------------------------------------
 # Validation
 # ---------------------------------------------------------------------------
@@ -281,14 +306,14 @@ def test_text_rendering():
     assert "sketch 135a2760" in text
     assert "$bg" in text
     assert "$frame" in text
-    assert "REGION_PERIODIC_REPAIR" in text
+    assert "REPAIR_MISMATCH" in text
     assert "-> repair" in text
 
 
 def test_text_rendering_composite():
     s = _composite_alignment_sketch()
     text = sketch_to_text(s)
-    assert "COMPOSITE_ROLE_ALIGNMENT" in text
+    assert "APPLY_RELATION" in text
     assert "$anchor" in text
     assert "$center" in text
     assert "?axis" in text
@@ -297,7 +322,7 @@ def test_text_rendering_composite():
 def test_text_rendering_canvas():
     s = _canvas_layout_sketch()
     text = sketch_to_text(s)
-    assert "CANVAS_LAYOUT" in text
+    assert "CONSTRUCT_CANVAS" in text
     assert "?output_dims" in text
 
 
@@ -379,3 +404,179 @@ def test_sketches_are_distinct():
     families = [s.primitive_families for s in sketches]
     # No two sketches should have identical primitive sequences
     assert len(set(families)) == len(families)
+
+
+# ---------------------------------------------------------------------------
+# SketchGraph — graph-shaped IR
+# ---------------------------------------------------------------------------
+
+
+def _periodic_graph() -> SketchGraph:
+    """Build a periodic repair graph directly from nodes."""
+    return SketchGraph(
+        task_id="test_periodic",
+        nodes={
+            "roles": SketchNode(
+                id="roles",
+                primitive=Primitive.BIND_ROLE,
+                inputs=("input",),
+                roles=(RoleVar("bg", RoleKind.BG, "background"),),
+            ),
+            "interior": SketchNode(
+                id="interior",
+                primitive=Primitive.PEEL_FRAME,
+                inputs=("roles",),
+                roles=(RoleVar("frame", RoleKind.FRAME, "frame border"),),
+            ),
+            "cells": SketchNode(
+                id="cells",
+                primitive=Primitive.PARTITION_GRID,
+                inputs=("interior",),
+            ),
+            "repaired": SketchNode(
+                id="repaired",
+                primitive=Primitive.REPAIR_LINES,
+                inputs=("cells",),
+                slots=(
+                    Slot("axis", SlotType.AXIS, evidence="row"),
+                    Slot("period", SlotType.INT, constraint="positive", evidence=2),
+                ),
+            ),
+            "motif_repaired": SketchNode(
+                id="motif_repaired",
+                primitive=Primitive.REPAIR_2D_MOTIF,
+                inputs=("repaired",),
+            ),
+        },
+        output_id="motif_repaired",
+        description="periodic repair as a graph",
+        metadata={"family": "framed_periodic_repair", "dominant_axis": "row", "dominant_period": 2},
+    )
+
+
+def test_graph_construction():
+    g = _periodic_graph()
+    assert len(g.nodes) == 5
+    assert g.output_id == "motif_repaired"
+    assert g.task_id == "test_periodic"
+
+
+def test_graph_validation_passes():
+    g = _periodic_graph()
+    errors = g.validate()
+    assert errors == [], f"unexpected errors: {errors}"
+
+
+def test_graph_validation_catches_missing_dep():
+    g = SketchGraph(
+        task_id="bad",
+        nodes={
+            "a": SketchNode(id="a", primitive=Primitive.PAINT, inputs=("nonexistent",)),
+        },
+        output_id="a",
+    )
+    errors = g.validate()
+    assert any("nonexistent" in e for e in errors)
+
+
+def test_graph_validation_catches_bad_output():
+    g = SketchGraph(
+        task_id="bad",
+        nodes={
+            "a": SketchNode(id="a", primitive=Primitive.PAINT, inputs=("input",)),
+        },
+        output_id="missing",
+    )
+    errors = g.validate()
+    assert any("missing" in e for e in errors)
+
+
+def test_graph_topo_order():
+    g = _periodic_graph()
+    order = g.topo_order()
+    assert len(order) == 5
+    # roles must come before interior
+    assert order.index("roles") < order.index("interior")
+    # interior must come before cells
+    assert order.index("interior") < order.index("cells")
+    # cells must come before repaired
+    assert order.index("cells") < order.index("repaired")
+    # repaired must come before motif_repaired
+    assert order.index("repaired") < order.index("motif_repaired")
+
+
+def test_graph_predecessors_and_successors():
+    g = _periodic_graph()
+    assert g.predecessors("cells") == ("interior",)
+    assert g.successors("cells") == ("repaired",)
+    assert g.predecessors("roles") == ("input",)
+    assert g.successors("repaired") == ("motif_repaired",)
+
+
+def test_graph_from_sketch_roundtrip():
+    """Sketch → SketchGraph → Sketch preserves structure."""
+    original = _periodic_repair_sketch()
+    graph = SketchGraph.from_sketch(original)
+    restored = graph.to_sketch()
+    assert restored.task_id == original.task_id
+    assert len(restored.steps) == len(original.steps)
+    assert restored.output_ref == original.output_ref
+    # Step names preserved
+    assert {s.name for s in restored.steps} == {s.name for s in original.steps}
+
+
+def test_graph_from_composite_sketch():
+    """Composite alignment sketch converts to graph cleanly."""
+    sketch = _composite_alignment_sketch()
+    graph = SketchGraph.from_sketch(sketch)
+    assert graph.validate() == []
+    assert len(graph.nodes) == len(sketch.steps)
+    # Topo order should be valid
+    order = graph.topo_order()
+    assert len(order) == len(sketch.steps)
+
+
+# ---------------------------------------------------------------------------
+# Specialization
+# ---------------------------------------------------------------------------
+
+
+def test_specialization_construction():
+    spec = Specialization(
+        task_id="test",
+        bindings=(
+            ResolvedBinding(node_id="repaired", name="axis", value="row", source="evidence"),
+            ResolvedBinding(node_id="repaired", name="period", value=2, source="evidence"),
+            ResolvedBinding(node_id="__task__", name="dominant_axis", value="row", source="evidence"),
+        ),
+    )
+    assert spec.get("repaired", "axis") == "row"
+    assert spec.get("repaired", "period") == 2
+    assert spec.get("__task__", "dominant_axis") == "row"
+    assert spec.get("nonexistent", "x") is None
+
+
+def test_specialization_bindings_for_node():
+    spec = Specialization(
+        task_id="test",
+        bindings=(
+            ResolvedBinding(node_id="a", name="x", value=1),
+            ResolvedBinding(node_id="a", name="y", value=2),
+            ResolvedBinding(node_id="b", name="z", value=3),
+        ),
+    )
+    a_bindings = spec.bindings_for_node("a")
+    assert len(a_bindings) == 2
+    b_bindings = spec.bindings_for_node("b")
+    assert len(b_bindings) == 1
+
+
+def test_specialization_binding_names():
+    spec = Specialization(
+        task_id="test",
+        bindings=(
+            ResolvedBinding(node_id="a", name="axis", value="row"),
+            ResolvedBinding(node_id="b", name="period", value=2),
+        ),
+    )
+    assert spec.binding_names == frozenset({"axis", "period"})

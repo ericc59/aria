@@ -288,6 +288,36 @@ def _align_center_to_col_of(anchor: ObjectNode) -> callable:
     return transform
 
 
+def _gravity_to_edge(direction, grid_rows: int, grid_cols: int) -> callable:
+    """Return a transform that moves an object to the grid edge in the given direction."""
+    # Normalize direction: executor may pass int or Dir enum
+    if isinstance(direction, int):
+        direction = Dir(direction)
+
+    def transform(obj: ObjectNode) -> ObjectNode:
+        x, y, w, h = obj.bbox
+        if direction == Dir.UP:
+            return _replace_obj(obj, bbox=(x, 0, w, h))
+        elif direction == Dir.DOWN:
+            return _replace_obj(obj, bbox=(x, grid_rows - h, w, h))
+        elif direction == Dir.LEFT:
+            return _replace_obj(obj, bbox=(0, y, w, h))
+        elif direction == Dir.RIGHT:
+            return _replace_obj(obj, bbox=(grid_cols - w, y, w, h))
+        return obj
+    return transform
+
+
+register(
+    "gravity_to_edge",
+    OpSignature(
+        params=(("dir", Type.DIR), ("grid_rows", Type.INT), ("grid_cols", Type.INT)),
+        return_type=Type.OBJ_TRANSFORM,
+    ),
+    _gravity_to_edge,
+)
+
+
 register(
     "align_center_to_row_of",
     OpSignature(

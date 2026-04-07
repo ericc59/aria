@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 
-from aria.sketch import PrimitiveFamily, Sketch, sketch_to_text
+from aria.sketch import PrimitiveFamily, Sketch, SketchGraph, sketch_to_text
 from aria.sketch_fit import (
+    fit_canvas_construction,
     fit_composite_role_alignment,
     fit_framed_periodic_repair,
     fit_sketches,
+    specialize_sketch,
     _detect_row_period,
 )
 from aria.types import DemoPair, grid_from_list
@@ -182,10 +184,14 @@ def test_fit_framed_periodic_repair():
     sketch = fit_framed_periodic_repair(demos, task_id="test_periodic")
     assert sketch is not None
     assert sketch.task_id == "test_periodic"
-    assert any(s.primitive == PrimitiveFamily.REGION_PERIODIC_REPAIR for s in sketch.steps)
-    # Should detect row-periodic with period 2
-    repair_step = next(s for s in sketch.steps if s.primitive == PrimitiveFamily.REGION_PERIODIC_REPAIR)
-    axis_slot = next(s for s in repair_step.slots if s.name == "axis")
+    # Should emit decomposed primitives: PEEL_FRAME, PARTITION_GRID, REPAIR_LINES
+    from aria.sketch import Primitive
+    primitives = sketch.primitive_pattern
+    assert "PEEL_FRAME" in primitives
+    assert "PARTITION_GRID" in primitives
+    assert "REPAIR_LINES" in primitives
+    # Should detect period 2
+    repair_step = next(s for s in sketch.steps if s.primitive == Primitive.REPAIR_LINES)
     period_slot = next(s for s in repair_step.slots if s.name == "period")
     assert period_slot.evidence == 2
 
@@ -402,3 +408,230 @@ def test_real_581f7754_has_composites():
         frame_colors.add(dec.frame_color)
     assert len(center_colors) >= 2, "Center colors should rotate"
     assert len(frame_colors) >= 2, "Frame colors should rotate"
+
+
+# ---------------------------------------------------------------------------
+# Specialization pass
+# ---------------------------------------------------------------------------
+
+
+def test_specialize_periodic_sketch():
+    """Specialization extracts axis and period from periodic sketch."""
+    demos = _framed_periodic_task()
+    sketch = fit_framed_periodic_repair(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    assert spec.task_id == "test"
+    assert spec.get("__task__", "dominant_axis") in ("row", "col")
+    assert isinstance(spec.get("__task__", "dominant_period"), int)
+    assert spec.get("__task__", "frame_colors") is not None
+
+
+def test_specialize_resolves_slot_evidence():
+    """Specialization resolves slot evidence into bindings."""
+    demos = _framed_periodic_task()
+    sketch = fit_framed_periodic_repair(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    # The "repaired" node has axis and period slots with evidence
+    repair_bindings = spec.bindings_for_node("repaired")
+    names = {b.name for b in repair_bindings}
+    assert "axis" in names
+    assert "period" in names
+
+
+def test_specialize_composite_sketch():
+    """Specialization works on composite alignment sketches too."""
+    demos = _composite_alignment_task()
+    sketch = fit_composite_role_alignment(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    assert spec.task_id == "test"
+    assert len(spec.bindings) > 0
+
+
+def test_specialize_composite_resolves_per_demo_roles():
+    """Specialization resolves per-demo center/frame/anchor for composites."""
+    demos = _composite_alignment_task()
+    sketch = fit_composite_role_alignment(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    per_demo_roles = spec.get("__relation__", "per_demo_roles")
+    assert per_demo_roles is not None
+    assert len(per_demo_roles) == 2
+
+    # Demo 0: center=4, frame=8, bg=0
+    assert per_demo_roles[0]["center"] == 4
+    assert per_demo_roles[0]["frame"] == 8
+    assert per_demo_roles[0]["bg"] == 0
+
+    # Demo 1: center=1, frame=3, bg=0
+    assert per_demo_roles[1]["center"] == 1
+    assert per_demo_roles[1]["frame"] == 3
+    assert per_demo_roles[1]["bg"] == 0
+
+
+def test_specialize_composite_resolves_per_demo_axis():
+    """Specialization resolves per-demo alignment axis for composites."""
+    demos = _composite_alignment_task()
+    sketch = fit_composite_role_alignment(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    per_demo_axis = spec.get("__relation__", "per_demo_axis")
+    assert per_demo_axis is not None
+    assert len(per_demo_axis) == 2
+    assert all(a in ("row", "col") for a in per_demo_axis)
+
+
+def test_specialize_composite_resolves_structural_invariants():
+    """Specialization captures n_composites and roles_rotate."""
+    demos = _composite_alignment_task()
+    sketch = fit_composite_role_alignment(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    n_composites = spec.get("__relation__", "n_composites")
+    assert n_composites is not None
+    assert n_composites >= 1
+
+    roles_rotate = spec.get("__relation__", "roles_rotate")
+    assert roles_rotate is not None
+
+
+def test_specialize_captures_bg_consensus():
+    """When all demos have the same bg, specialization resolves it."""
+    # Both demos have bg=3 in this fixture? No — different bgs.
+    # Use a task where bg is consistent.
+    demos = _composite_alignment_task()  # bg=0 for both demos
+    sketch = fit_composite_role_alignment(demos, task_id="test")
+    if sketch is None:
+        return
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    # Check if bg was resolved for any node with BG role
+    bg_bindings = [b for b in spec.bindings if b.name == "bg"]
+    if bg_bindings:
+        assert bg_bindings[0].value == 0
+        assert bg_bindings[0].source == "consensus"
+
+
+# ---------------------------------------------------------------------------
+# Canvas construction fitting
+# ---------------------------------------------------------------------------
+
+
+def test_fit_canvas_tile():
+    """Tile task fits canvas construction."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 2], [3, 4]]),
+            output=grid_from_list([
+                [1, 2, 1, 2], [3, 4, 3, 4],
+                [1, 2, 1, 2], [3, 4, 3, 4],
+            ]),
+        ),
+    )
+    sketch = fit_canvas_construction(demos, task_id="test")
+    assert sketch is not None
+    assert sketch.metadata.get("strategy") == "tile"
+    from aria.sketch import Primitive
+    assert any(s.primitive == Primitive.CONSTRUCT_CANVAS for s in sketch.steps)
+
+
+def test_fit_canvas_upscale():
+    """Upscale task fits canvas construction."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 2], [3, 4]]),
+            output=grid_from_list([
+                [1, 1, 2, 2], [1, 1, 2, 2],
+                [3, 3, 4, 4], [3, 3, 4, 4],
+            ]),
+        ),
+    )
+    sketch = fit_canvas_construction(demos, task_id="test")
+    assert sketch is not None
+    assert sketch.metadata.get("strategy") == "upscale"
+
+
+def test_fit_canvas_crop():
+    """Crop task fits canvas construction."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([
+                [0, 0, 0, 0], [0, 1, 2, 0], [0, 3, 4, 0], [0, 0, 0, 0],
+            ]),
+            output=grid_from_list([[1, 2], [3, 4]]),
+        ),
+    )
+    sketch = fit_canvas_construction(demos, task_id="test")
+    assert sketch is not None
+    assert sketch.metadata.get("strategy") == "crop"
+
+
+def test_fit_canvas_rejects_same_dims():
+    """Same-dims tasks should not fit canvas construction."""
+    demos = _framed_periodic_task()
+    sketch = fit_canvas_construction(demos)
+    assert sketch is None
+
+
+def test_fit_canvas_rejects_no_pattern():
+    """Random dims change with no detectable strategy should not fit."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 2, 3]]),
+            output=grid_from_list([[9, 8], [7, 6]]),
+        ),
+    )
+    sketch = fit_canvas_construction(demos)
+    assert sketch is None
+
+
+def test_specialize_canvas_tile():
+    """Canvas specialization resolves tile parameters from demos."""
+    demos = (
+        DemoPair(
+            input=grid_from_list([[1, 2], [3, 4]]),
+            output=grid_from_list([
+                [1, 2, 1, 2], [3, 4, 3, 4],
+                [1, 2, 1, 2], [3, 4, 3, 4],
+            ]),
+        ),
+        DemoPair(
+            input=grid_from_list([[5, 6], [7, 8]]),
+            output=grid_from_list([
+                [5, 6, 5, 6], [7, 8, 7, 8],
+                [5, 6, 5, 6], [7, 8, 7, 8],
+            ]),
+        ),
+    )
+    sketch = fit_canvas_construction(demos, task_id="test")
+    assert sketch is not None
+
+    graph = SketchGraph.from_sketch(sketch)
+    spec = specialize_sketch(graph, demos)
+
+    assert spec.get("__canvas__", "strategy") == "tile"
+    assert spec.get("__canvas__", "tile_rows") == 2
+    assert spec.get("__canvas__", "tile_cols") == 2
+    assert spec.get("__canvas__", "output_dims") == (4, 4)

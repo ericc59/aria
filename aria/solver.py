@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from aria.factored_memory import FactoredMemoryStore
+from aria.factored_retrieval import ingest_solve_record
 from aria.graph.signatures import compute_task_signatures
 from aria.library.store import Library
 from aria.program_store import ProgramStore
@@ -42,7 +44,7 @@ def solve_task(
     task_id: str | None = None,
     retrieval_limit: int = 0,
     max_search_steps: int = 3,
-    max_search_candidates: int = 5000,
+    max_search_candidates: int = 20000,
     max_refinement_rounds: int = 2,
     include_core_ops: bool = True,
     beam_width: int = 0,
@@ -50,6 +52,7 @@ def solve_task(
     beam_mutations_per_candidate: int = 30,
     local_policy: LocalPolicy | None = None,
     rerank_edits: bool = True,
+    factored_store: FactoredMemoryStore | None = None,
 ) -> SolveResult:
     """Solve a single ARC task without any proposer model."""
     task_signatures = tuple(sorted(compute_task_signatures(task.train)))
@@ -72,6 +75,14 @@ def solve_task(
                 source="offline-retrieval",
                 signatures=frozenset(task_signatures),
             )
+        if factored_store is not None:
+            ingest_solve_record(
+                task.train,
+                program,
+                task_id=task_id,
+                source="offline-retrieval",
+                factored_store=factored_store,
+            )
         return SolveResult(
             task_id=task_id,
             solved=True,
@@ -87,6 +98,7 @@ def solve_task(
         task.train,
         library,
         program_store=program_store,
+        factored_store=factored_store,
         max_steps=max_search_steps,
         max_candidates=max_search_candidates,
         max_rounds=max_refinement_rounds,
@@ -121,6 +133,16 @@ def solve_task(
             task_id=task_id,
             source="offline-search",
             signatures=frozenset(task_signatures),
+        )
+
+    # Ingest factored record from this solve
+    if factored_store is not None:
+        ingest_solve_record(
+            task.train,
+            program,
+            task_id=task_id,
+            source="offline-search",
+            factored_store=factored_store,
         )
 
     return SolveResult(

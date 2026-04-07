@@ -1,74 +1,210 @@
 # ARIA: Abstract Reasoning via Inductive Abstraction
 
-## System design v3
-
 ---
 
 ## Thesis
 
-ARIA is a step machine. It extracts a typed state graph from the input, then a
-typed offline runtime tries to solve the task by replaying verified programs,
-running bounded typed search, and iteratively refining failures using exact
-verifier feedback. A separate bootstrap proposer can be used offline during
-training to generate additional verified programs, which are then mined into a
-growing leaf-first memory, provenance-aware abstraction library, and frozen
-snapshots for benchmark runs.
+ARIA is a domain-general framework for few-shot inductive program synthesis.
+Given input/output examples, it proposes typed computation graph hypotheses,
+resolves task-specific static structure via a specialization pass, compiles
+graphs into executable programs, and gates correctness with exact verification.
 
----
+The framework (`aria.core`) is parametric over the domain.  ARC grid
+reasoning is the first instantiation, but the core pipeline — graph IR,
+specialization protocol, compilation, verification — works for any domain
+with typed I/O examples and a DSL of operations.
 
-## What this is
+Applied to ARC specifically, ARIA compiles graph-shaped sketch
+hypotheses into typed, verifiable programs. No neural runtime. No
+brute-force search. Every solution is a small, inspectable program in a
+typed step language, verified exactly against all train demos.
 
-Six components, two phases:
-
-1. Object-centric state graph extraction (deterministic, no learning)
-2. Typed step-machine runtime (fixed registry, currently 126 ops)
-3. Exact verification with three modes (stateless, leave-one-out, sequential)
-4. Offline retrieval + typed search + verifier-driven refinement
-5. Leaf-first program store + provenance-aware abstraction library + frozen snapshots
-6. Optional bootstrap proposer for offline corpus generation only
-
-The runtime solving path is symbolic, deterministic, and inspectable. Neural
-components are confined to offline bootstrap/training workflows.
-
-## What this is not
-
-- Not an ensemble of independent solvers that vote at the end
-- Not a remote-LLM runtime solver
-- Not a neural transduction model that predicts pixels directly
-- Not a brute-force search over arbitrary code
-- No "fallback to Python." Every solution is a typed, verifiable, inspectable
-  program in the step language. If the runtime can't express it, the system
-  fails honestly rather than escaping to untyped code.
-
----
-
-## Architecture
+The canonical pipeline:
 
 ```
-Grid Pairs ──→ [1. State Graph Extraction] ──→ State Graphs + Deltas
-                                                      │
-                                                      ▼
-                         [2. Program Store Retrieval + Typed Search]
-                                                      │
-                                                      ▼
-                              [3. Runtime Execution + Verification]
-                                     / \
-                               pass /   \ fail (structured diff + trace)
-                                   /     \
-                                  ▼       └──→ [4. Refinement Loop]
-                            Submit output             │
-                                  │                  ▼
-                                  └────→ [5. Trace / Program Persistence]
-                                                       │
-                                                       ▼
-                                           [6. Library Mining + Snapshots]
-
-Offline bootstrap phase:
-
-State Graphs + Deltas ──→ [Bootstrap Proposer] ──→ Verified Programs ──→ same persistence/mining pipeline
+Examples
+    │
+    ▼
+Fitter ── propose ComputationGraph hypotheses
+    │
+    ▼
+Specializer ── extract Specialization from graph + examples
+    │
+    ▼
+Compiler ── compile graph + specialization → Program
+    │
+    ▼
+Verifier ── exact verification (the only correctness gate)
 ```
 
+One pipeline. Domain-general protocol. ARC is one instantiation.
+
 ---
+
+## Architecture status
+
+### Canonical (one pipeline)
+
+| Module | Role | Status |
+|--------|------|--------|
+| `aria.core.graph` | `ComputationGraph` + `Specialization` IR | Canonical |
+| `aria.core.protocol` | `Fitter → Specializer → Compiler → Verifier` | Canonical |
+| `aria.core.arc` | ARC domain instantiation | Canonical |
+| `aria.core.learn` | Bootstrap-propose-verify (seed generation) | Canonical |
+| `aria.core.library` | Graph template accumulator | Canonical |
+| `aria.core.proposer` | Combinatorial graph proposal from templates | Canonical |
+| `aria.core.editor_env` | Per-task graph editor scaffold (future learned path) | Scaffold |
+
+### ARC-specific (adapters for the canonical pipeline)
+
+| Module | Role |
+|--------|------|
+| `aria.sketch` | `SketchGraph` — ARC-facing adapter for `ComputationGraph` |
+| `aria.sketch_fit` | ARC fitters: periodic repair, alignment, canvas, movement, grid transform |
+| `aria.sketch_compile` | ARC compiler: graph-native lanes + specialization |
+
+`SketchGraph` is a transitional adapter. New learning/editing work targets
+`ComputationGraph` directly. `SketchGraph` exists only because the ARC
+fitters and compiler currently emit/consume it, and `aria.core.arc` bridges
+the two representations.
+
+### Supporting tools (not part of the canonical pipeline)
+
+| Module | Role |
+|--------|------|
+| `aria.core.stepper` | Diff-guided iterative program construction |
+| `aria.core.world` | Multi-layer task understanding |
+| `aria.core.pixel_rule` | Decision-tree pixel rule induction |
+
+These are useful tools but not part of the canonical fit/specialize/compile/verify
+pipeline. They may feed into the graph editor's state encoding.
+
+### Deprecated / experimental
+
+| Module | Status |
+|--------|--------|
+| `aria.core.experimental.hybrid` | DEPRECATED — stepper-op ranking |
+| `aria.core.experimental.neural` | DEPRECATED — op predictor for stepper |
+| `aria.legacy.*` | Legacy heuristic search/refinement stack |
+
+These are not the basis for new work. The hybrid/neural path was an
+experiment in stepper-op ranking that did not produce eval results.
+The future learned path is the per-task recurrent graph editor
+(`aria.core.editor_env`), not stepper-op ranking.
+
+### Future: per-task recurrent graph editor
+
+The next step is a per-task recurrent editor that operates on
+`ComputationGraph` + `Specialization`:
+- **State**: current graph, specialization, compile result, diff signal
+- **Actions**: typed graph rewrites (add node, set op, bind role, etc.)
+- **Reward**: exact verification (primary) + diff reduction (shaping) + MDL (regularization)
+- **Training**: from scratch on each task's demos at test time
+
+---
+
+## Domain-general core (`aria.core`)
+
+The framework defines four protocol interfaces that any domain implements:
+
+| Interface | Responsibility |
+|-----------|---------------|
+| `Fitter` | Propose `ComputationGraph` hypotheses from examples |
+| `Specializer` | Extract `Specialization` (resolved bindings) from graph + examples |
+| `Compiler` | Compile graph + specialization into an executable program |
+| `Verifier` | Check program against examples (exact, binary, no partial credit) |
+
+The `solve()` function orchestrates: `fit → specialize → compile → verify`.
+It is domain-independent.
+
+Key types in `aria.core.graph`:
+- `ComputationGraph` — DAG of `GraphNode`s with string-typed ops, roles, slots
+- `Specialization` — tuple of `ResolvedBinding`s (node, name, value, source)
+- `CompileSuccess` / `CompileFailure` — typed compilation outcomes
+
+The ARC instantiation (`aria.core.arc`) provides `ARCFitter`, `ARCSpecializer`,
+`ARCCompiler`, `ARCVerifier` — bridging the generic protocol to ARC grid ops.
+
+---
+
+## ARC compilation pipeline
+
+### ARC-specific modules
+
+| Module | Purpose |
+|--------|---------|
+| `aria.sketch` | Sketch IR: `SketchGraph`, `SketchNode`, `Specialization`, `ResolvedBinding` |
+| `aria.sketch_fit` | Fit sketches from demo evidence; `specialize_sketch` pass |
+| `aria.sketch_compile` | `compile_sketch_graph(graph, specialization, demos)` |
+| `aria.decomposition` | Grid decomposition: framed regions, composites, separators |
+| `aria.graph` | Object-centric state graph extraction |
+| `aria.runtime` | Typed step-machine (126 ops, fixed registry) |
+| `aria.verify` | Exact verification (stateless, leave-one-out, sequential) |
+
+### Key types
+
+**SketchGraph** — explicit DAG of `SketchNode`s. Each node has a primitive op,
+typed input edges, roles, and slots. Supports topological ordering,
+predecessor/successor queries, and structural validation.
+
+**Specialization** — first-class bundle of `ResolvedBinding`s: slot values, role
+groundings, and task-level parameters extracted from demo evidence. The compiler
+reads from specialization, not from loose metadata.
+
+### Graph-native lanes
+
+Five primitive lanes compile directly from graph + specialization:
+
+| Graph structure | Specialization node | Output | Strategy |
+|----------------|-------------------|--------|----------|
+| REPAIR_LINES / REPAIR_2D_MOTIF | `__task__`: axis, period | Task-level program | Periodic regularity repair |
+| APPLY_RELATION + ANCHOR role | `__relation__`: per-demo roles, axes | Per-demo programs | Composite alignment (colors rotate) |
+| CONSTRUCT_CANVAS | `__canvas__`: strategy, dims, params | Task-level program | Tile, upscale, or crop |
+| APPLY_TRANSFORM (movement) | `__movement__`: strategy, dr/dc or direction | Task-level program | Uniform translate or gravity-to-edge |
+| APPLY_TRANSFORM (grid transform) | `__grid_transform__`: transform, params | Task-level program | Rotate, reflect, transpose, fill_enclosed |
+
+Unrecognized graph structures fall back through `compile_sketch(sketch, demos)`.
+
+### What is still compatibility / fallback
+
+- `compile_sketch(sketch, demos)` — the pre-graph compiler that dispatches on
+  primitive pattern sets + slot names via `_COMPOSITIONS` registry. Still
+  functional for the three lanes above (as the fallback path) and for
+  APPLY_TRANSFORM + PAINT (not yet implemented; returns structured failure).
+- `Sketch` / `SketchStep` — linear representation. Fitters still emit these;
+  `SketchGraph.from_sketch()` converts to graph form.
+- `PrimitiveFamily` — alias for `Primitive`. Legacy lane names (e.g.
+  `IDENTIFY_ROLES`, `REGION_PERIODIC_REPAIR`) are aliases that map to generic
+  primitives.
+
+---
+
+## Legacy heuristic stack (`aria.legacy.*`)
+
+DEPRECATED. The original family-based observation/refinement pipeline.
+Functional and maintained for backward compatibility, but not the
+direction for new work. Not part of the canonical architecture.
+
+| Module | Purpose |
+|--------|---------|
+| `aria.legacy.observe` | Per-object observation and rule inference |
+| `aria.legacy.refinement` | Verifier-driven refinement loop |
+| `aria.legacy.structural_edit` | Bounded structural edits over near-miss candidates |
+| `aria.legacy.offline_search` | Deterministic typed program search |
+
+Backward-compatible shims at `aria.observe`, `aria.refinement`,
+`aria.structural_edit`, and `aria.offline_search` re-export everything.
+Existing imports are unaffected.
+
+### Shared layers
+
+State-graph extraction (`aria.graph`), the typed runtime (`aria.runtime`), and
+exact verification (`aria.verify`) are shared by both the generalized and legacy
+paths.
+
+---
+
+## Detailed component reference
 
 ## 1. State graph extraction
 

@@ -1,0 +1,1584 @@
+# Auto-generated expanded structural gates annotations
+# 110 additional tasks from v2-eval (auto-annotated)
+# Decomposition labels from propose_decompositions()
+# Template/entity/relation labels are heuristic
+
+tasks:
+- task_id: 135a2760
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 136b0064
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 13e47133
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 142ca369
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 16b78196
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 16de56c4
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 1818057f
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 195c6913
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 1ae2feb7
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 20270e3b
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  relations: []
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 20a9e565
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 21897d95
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 221dfab4
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 247ef758
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 269e22fb
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  relations: []
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 271d71e2
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 28a6681f
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  relations: []
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 291dc1e1
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 2b83f449
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 2ba387bc
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 2c181942
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 2d0172a1
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 31f7f899
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 35ab12c3
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 36a08778
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 38007db0
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 3a25b0d8
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 3e6067c3
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 409aa875
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 446ef5d2
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 45a5af55
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 4a21e3da
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 4c3d4a41
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  relations: []
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 4c416de3
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 4e34c42c
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 53fb4810
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 581f7754
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 58f5dbd5
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 5961cc34
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 5dbc8537
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 62593bfd
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 64efde09
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 65b59efc
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 67e490f4
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 6e453dd6
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 6e4f6532
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 6ffbe589
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 71e489b6
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 7491f3cf
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 7666fa5d
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 78332cb0
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 7b0280bc
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 7b3084d4
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 7b5033c1
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 7b80bb43
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 7c66cb00
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 7ed72f31
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 800d221b
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 80a900e0
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 8698868d
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 88bcf3b4
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 89565ca0
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 898e7135
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 8b9c3697
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 8e5c0c38
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 8f215267
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 8f3a5a89
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 9385bd28
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: 981571dc
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: 9aaea919
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: a251c730
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: a25697e4
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: a32d8b75
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: a395ee82
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: a47bf94d
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: a6f40cea
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: aa4ec2a5
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: abc82100
+  decomposition: host_slot
+  entities:
+  - name: hosts
+    kind: host
+    selector_note: host structures
+  - name: slots
+    kind: gap
+    selector_note: slot positions
+  relations:
+  - kind: host_of
+    source: hosts
+    target: slots
+  template: host_slot_place
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: b0039139
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: b10624e5
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: b5ca7ac4
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: b6f77b65
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: b99e7126
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: b9e38dc0
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: bf45cf4b
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: c4d067a0
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: c7f57c3e
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: cb2d8a2c
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: cbebaa4b
+  decomposition: partition
+  entities:
+  - name: cells
+    kind: panel
+    selector_note: partition cells
+  relations:
+  - kind: aligned_row
+    source: cells
+    target: cells
+  - kind: aligned_col
+    source: cells
+    target: cells
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: d35bdbdc
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: d59b0160
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: d8e07eb2
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: da515329
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: db0c5428
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: db695cfb
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: dbff022c
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: dd6b8c4b
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: de809cff
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: region_fill
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: dfadab01
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: e12f9a14
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: e3721c99
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: e376de54
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  - name: markers
+    kind: marker
+    selector_note: singletons
+  relations:
+  - kind: adjacent_to
+    source: markers
+    target: foreground_objects
+  template: match_recolor
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: e8686506
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: e87109e9
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: edb79dae
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: eee78d87
+  decomposition: object
+  entities:
+  - name: foreground_objects
+    kind: object
+    selector_note: colored objects on bg
+  relations: []
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: f560132c
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: framed regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: f931b4a8
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred
+- task_id: faa9f03d
+  decomposition: panel
+  entities:
+  - name: panels
+    kind: panel
+    selector_note: separator-delimited panels
+  relations:
+  - kind: aligned_row
+    source: panels
+    target: panels
+  template: panel_combine_rewrite
+  critical_slots:
+    assignment_rule: auto-inferred
+    axis: separator-based
+- task_id: fc7cae8d
+  decomposition: region
+  entities:
+  - name: regions
+    kind: region
+    selector_note: bordered rectangular regions
+  relations:
+  - kind: contains
+    source: regions
+    target: regions
+  template: extract_modify
+  critical_slots:
+    assignment_rule: auto-inferred

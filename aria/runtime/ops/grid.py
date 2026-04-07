@@ -709,3 +709,710 @@ register(
     ),
     _fill_diagonal,
 )
+
+
+# ---------------------------------------------------------------------------
+# Periodic repair: detect and fix periodic pattern violations in framed regions
+# ---------------------------------------------------------------------------
+
+
+def _repair_periodic(grid: Grid, axis: int, period: int) -> Grid:
+    """Compatibility wrapper: repair periodic violations in framed regions.
+
+    Delegates to the primitive pipeline:
+    1. peel_frame → strip outermost frame(s)
+    2. partition_grid → find sub-cells via separators
+    3. repair_grid_lines → infer motif + fix mismatches per cell
+
+    Args:
+        grid: input grid
+        axis: 0 for row-periodic, 1 for col-periodic
+        period: hint period length
+
+    Returns:
+        repaired grid (copy; input is not modified)
+    """
+    result = grid.copy()
+    rows, cols = result.shape
+
+    vals, counts = np.unique(grid, return_counts=True)
+    bg = int(vals[int(np.argmax(counts))])
+
+    # Use the recursive handler which composes: peel → partition → repair
+    _repair_regions_recursive(result, bg, axis, period, depth=3)
+
+    return result
+
+
+def _repair_regions_recursive(
+    grid: Grid, bg: int, axis: int, period: int, depth: int,
+) -> None:
+    """Find framed regions and repair periodic violations in-place.
+
+    Key: only repair at the deepest framed level. If a sub-frame is found
+    inside, the outer frame's interior is NOT directly repaired (the sub-frame
+    handler takes care of the content).
+    """
+    if depth <= 0:
+        return
+
+    rows, cols = grid.shape
+    if rows < 1 or cols < 3:
+        return
+
+    # Small grids (< 3 rows): no frame possible, repair content directly
+    if rows < 3:
+        _repair_interior_periodic(grid, axis, period)
+        return
+
+    # Check if this grid has a frame
+    frame_color = _detect_frame_color(grid)
+    if frame_color is not None:
+        interior = grid[1:rows - 1, 1:cols - 1]
+        if interior.size > 0:
+            # Check if interior itself has a frame (nested)
+            inner_frame = _detect_frame_color(interior)
+            if inner_frame is not None and depth > 1:
+                # Recurse deeper — don't repair this level's interior
+                int_vals, int_counts = np.unique(interior, return_counts=True)
+                int_bg = int(int_vals[int(np.argmax(int_counts))])
+                _repair_regions_recursive(interior, int_bg, axis, period, depth - 1)
+            else:
+                # Deepest framed level — check for separator sub-regions
+                had_separators = _repair_separator_regions(interior, bg, axis, period, depth - 1)
+                if not had_separators:
+                    # No separators found — repair content directly
+                    _repair_interior_periodic(interior, axis, period)
+        return  # frame path handled
+
+    # No frame: look for separator-bounded sub-regions
+    _repair_separator_regions(grid, bg, axis, period, depth)
+
+
+def _detect_frame_color(grid: Grid) -> int | None:
+    """Check if the grid border is a uniform single color."""
+    rows, cols = grid.shape
+    if rows < 3 or cols < 3:
+        return None
+
+    border = set()
+    for c in range(cols):
+        border.add(int(grid[0, c]))
+        border.add(int(grid[rows - 1, c]))
+    for r in range(rows):
+        border.add(int(grid[r, 0]))
+        border.add(int(grid[r, cols - 1]))
+
+    return border.pop() if len(border) == 1 else None
+
+
+def _repair_interior_periodic(interior: Grid, axis: int, period: int) -> None:
+    """Repair periodic violations in an interior grid (in-place).
+
+    Delegates to _repair_grid_periodic_lines and copies results back.
+    """
+    repaired = _repair_grid_periodic_lines(interior, axis, period)
+    interior[:] = repaired
+
+
+def _repair_line_periodic(line: np.ndarray, hint_period: int) -> None:
+    """Infer motif and fix violations in-place. Thin wrapper over primitives."""
+    motif_info = _infer_line_motif(line, hint_period)
+    if motif_info is None:
+        return
+    pattern, period, violations, lo, hi = motif_info
+    for i in violations:
+        line[lo + i] = pattern[i % period]
+
+
+def _repair_separator_regions(
+    grid: Grid, bg: int, axis: int, period: int, depth: int,
+) -> bool:
+    """Find sub-regions bounded by separator rows AND cols, repair each.
+
+    Partitions the grid into a 2D grid of sub-cells using the finest
+    row and column separators, then recurses into each cell independently.
+    Returns True if any separator-bounded sub-regions were found.
+    """
+    rows, cols = grid.shape
+
+    # Find row separators: full rows of a single color
+    row_seps = _find_best_separators_axis(grid, "row")
+    # Find column separators: full columns of a single color
+    col_seps = _find_best_separators_axis(grid, "col")
+
+    if not row_seps and not col_seps:
+        return False
+
+    # Build row intervals
+    if row_seps:
+        row_intervals = []
+        for i in range(len(row_seps) - 1):
+            r0 = row_seps[i] + 1
+            r1 = row_seps[i + 1]
+            if r1 > r0:
+                row_intervals.append((r0, r1))
+    else:
+        row_intervals = [(0, rows)]
+
+    # Build column intervals
+    if col_seps:
+        col_intervals = []
+        for i in range(len(col_seps) - 1):
+            c0 = col_seps[i] + 1
+            c1 = col_seps[i + 1]
+            if c1 > c0:
+                col_intervals.append((c0, c1))
+    else:
+        col_intervals = [(0, cols)]
+
+    found = False
+    for r0, r1 in row_intervals:
+        for c0, c1 in col_intervals:
+            sub = grid[r0:r1, c0:c1]
+            if sub.size > 0:
+                found = True
+                sub_vals, sub_counts = np.unique(sub, return_counts=True)
+                sub_bg = int(sub_vals[int(np.argmax(sub_counts))])
+                _repair_regions_recursive(sub, sub_bg, axis, period, depth - 1)
+
+    return found
+
+
+def _find_best_separators_axis(grid: Grid, axis: str) -> list[int]:
+    """Find the finest set of full-line separators on the given axis.
+
+    axis="row": find rows where all values are the same color (needs ≥2 cols).
+    axis="col": find columns where all values are the same color (needs ≥2 rows).
+    Returns the separator indices for the color that creates the most sub-regions.
+    """
+    rows, cols = grid.shape
+    separators: dict[int, list[int]] = {}
+
+    if axis == "row":
+        if cols < 2:
+            return []  # need at least 2 cols for a meaningful row separator
+        for r in range(rows):
+            vals = set(int(grid[r, c]) for c in range(cols))
+            if len(vals) == 1:
+                separators.setdefault(vals.pop(), []).append(r)
+    else:
+        if rows < 2:
+            return []  # need at least 2 rows for a meaningful col separator
+        for c in range(cols):
+            vals = set(int(grid[r, c]) for r in range(rows))
+            if len(vals) == 1:
+                separators.setdefault(vals.pop(), []).append(c)
+
+    # Pick the color whose separators create the best partition.
+    # "Best" = most sub-regions of size ≥ 2 (ignore 1-wide gaps from
+    # interleaved separator colors).
+    best_color = None
+    best_score = 0
+    for color, seps in separators.items():
+        if len(seps) < 2:
+            continue
+        # Count sub-regions of size ≥ 2
+        n_good = sum(
+            1 for i in range(len(seps) - 1)
+            if seps[i + 1] - seps[i] > 2  # at least 2 content lines between separators
+        )
+        if n_good > best_score:
+            best_score = n_good
+            best_color = color
+        elif n_good == best_score and n_good > 0:
+            # Tie-break: fewer total separators (coarser partition)
+            if len(seps) < len(separators.get(best_color, [])):
+                best_color = color
+
+    if best_color is None or best_score < 1:
+        return []
+    return separators[best_color]
+
+
+# Compatibility wrapper — delegates to the primitive pipeline
+register(
+    "repair_periodic",
+    OpSignature(
+        params=(
+            ("grid", Type.GRID),
+            ("axis", Type.INT),
+            ("period", Type.INT),
+        ),
+        return_type=Type.GRID,
+    ),
+    _repair_periodic,
+)
+
+
+# ---------------------------------------------------------------------------
+# Explicit reusable primitives for the periodic-repair pipeline
+# ---------------------------------------------------------------------------
+
+
+def _peel_frame(grid: Grid) -> Grid:
+    """Strip the outermost uniform-color frame and return the interior.
+
+    If the grid has no uniform border, returns the grid unchanged.
+    """
+    fc = _detect_frame_color(grid)
+    if fc is None:
+        return grid
+    rows, cols = grid.shape
+    if rows < 3 or cols < 3:
+        return grid
+    return grid[1:rows - 1, 1:cols - 1].copy()
+
+
+register(
+    "peel_frame",
+    OpSignature(params=(("grid", Type.GRID),), return_type=Type.GRID),
+    _peel_frame,
+)
+
+
+def _partition_grid(grid: Grid) -> list:
+    """Partition a grid into sub-cells using row and column separators.
+
+    Returns a list of (row_start, col_start, sub_grid) tuples.
+    If no separators found, returns [(0, 0, grid)].
+    """
+    rows, cols = grid.shape
+    row_seps = _find_best_separators_axis(grid, "row")
+    col_seps = _find_best_separators_axis(grid, "col")
+
+    if not row_seps and not col_seps:
+        return [(0, 0, grid)]
+
+    row_intervals = []
+    if row_seps:
+        for i in range(len(row_seps) - 1):
+            r0, r1 = row_seps[i] + 1, row_seps[i + 1]
+            if r1 > r0:
+                row_intervals.append((r0, r1))
+    else:
+        row_intervals = [(0, rows)]
+
+    col_intervals = []
+    if col_seps:
+        for i in range(len(col_seps) - 1):
+            c0, c1 = col_seps[i] + 1, col_seps[i + 1]
+            if c1 > c0:
+                col_intervals.append((c0, c1))
+    else:
+        col_intervals = [(0, cols)]
+
+    cells = []
+    for r0, r1 in row_intervals:
+        for c0, c1 in col_intervals:
+            sub = grid[r0:r1, c0:c1]
+            if sub.size > 0:
+                cells.append((r0, c0, sub))
+    return cells
+
+
+def _infer_line_motif(line: np.ndarray, hint_period: int) -> tuple | None:
+    """Infer the majority-vote periodic motif of a 1D line.
+
+    Returns (pattern, period, violations, lo, hi) or None if no
+    repairable period is found.
+    - pattern: the repeating unit (list of ints)
+    - period: the period length
+    - violations: list of content-relative indices that deviate
+    - lo, hi: content region bounds (excluding border)
+    """
+    from collections import Counter
+
+    n = len(line)
+    if n < 3:
+        return None
+
+    # Detect border
+    edge_val = int(line[0])
+    start_border = 0
+    while start_border < n and int(line[start_border]) == edge_val:
+        start_border += 1
+    if start_border >= n:
+        return None
+
+    end_val = int(line[n - 1])
+    end_border = 0
+    while end_border < n and int(line[n - 1 - end_border]) == end_val:
+        end_border += 1
+
+    lo = max(start_border, 1)
+    hi = min(n - end_border, n - 1)
+    if hi - lo < 3:
+        return None
+
+    content = line[lo:hi]
+    cn = len(content)
+    candidates = [hint_period] + [p for p in range(2, cn // 2 + 1) if p != hint_period]
+
+    best = None
+    for period in candidates:
+        if period < 2 or period > cn // 2:
+            continue
+        pattern = []
+        for phase in range(period):
+            vals = [int(content[i]) for i in range(phase, cn, period)]
+            counts = Counter(vals)
+            pattern.append(counts.most_common(1)[0][0])
+
+        violations = [i for i in range(cn) if int(content[i]) != pattern[i % period]]
+        if not violations or len(violations) > cn // 3:
+            continue
+        if best is None or len(violations) < len(best[2]):
+            best = (tuple(pattern), period, violations, lo, hi)
+
+    return best
+
+
+def _repair_line_from_motif(
+    line: np.ndarray, motif: tuple, period: int,
+    violations: list, lo: int,
+) -> np.ndarray:
+    """Apply a known motif to repair violations in a line. Returns copy."""
+    result = line.copy()
+    for i in violations:
+        result[lo + i] = motif[i % period]
+    return result
+
+
+def _repair_grid_periodic_lines(grid: Grid, axis: int, hint_period: int) -> Grid:
+    """Infer motif + repair mismatches per line on the given axis.
+
+    Tries the specified axis first. If no repairs made, tries the other.
+    This is the primitive that replaces the old _repair_interior_periodic.
+    """
+    result = grid.copy()
+    rows, cols = result.shape
+
+    def _try_axis(ax: int) -> int:
+        repaired = 0
+        if ax == 0:
+            for r in range(rows):
+                motif_info = _infer_line_motif(result[r], hint_period)
+                if motif_info is not None:
+                    pattern, period, violations, lo, hi = motif_info
+                    for i in violations:
+                        result[r, lo + i] = pattern[i % period]
+                    repaired += 1
+        else:
+            for c in range(cols):
+                col = result[:, c].copy()
+                motif_info = _infer_line_motif(col, hint_period)
+                if motif_info is not None:
+                    pattern, period, violations, lo, hi = motif_info
+                    for i in violations:
+                        result[lo + i, c] = pattern[i % period]
+                    repaired += 1
+        return repaired
+
+    n = _try_axis(axis)
+    if n == 0:
+        _try_axis(1 - axis)
+
+    return result
+
+
+register(
+    "repair_grid_lines",
+    OpSignature(
+        params=(
+            ("grid", Type.GRID),
+            ("axis", Type.INT),
+            ("hint_period", Type.INT),
+        ),
+        return_type=Type.GRID,
+    ),
+    _repair_grid_periodic_lines,
+)
+
+
+def _repair_framed_lines(grid: Grid, axis: int, hint_period: int) -> Grid:
+    """Peel frames, partition into cells, repair lines in each cell.
+
+    Composed from explicit primitives:
+    1. peel_frame → strip outermost frame(s) to reach content
+    2. partition_grid → find sub-cells via row/column separators
+    3. repair_grid_lines → infer motif + fix mismatches per cell
+
+    The frame structure is preserved; only content within the deepest
+    framed regions is modified.
+    """
+    result = grid.copy()
+    _repair_framed_cells_recursive(result, axis, hint_period, depth=3)
+    return result
+
+
+def _repair_framed_cells_recursive(
+    grid: Grid, axis: int, hint_period: int, depth: int,
+) -> None:
+    """Recursive peel→partition→repair using explicit primitives (in-place)."""
+    if depth <= 0:
+        return
+
+    rows, cols = grid.shape
+    if rows < 1 or cols < 3:
+        return
+
+    if rows < 3:
+        # Too small for frame — repair content directly
+        repaired = _repair_grid_periodic_lines(grid, axis, hint_period)
+        grid[:] = repaired
+        return
+
+    # Step 1: detect and peel frame
+    frame_color = _detect_frame_color(grid)
+    if frame_color is not None:
+        interior = grid[1:rows - 1, 1:cols - 1]
+        if interior.size > 0:
+            inner_frame = _detect_frame_color(interior)
+            if inner_frame is not None and depth > 1:
+                # Nested frame — recurse into interior
+                _repair_framed_cells_recursive(interior, axis, hint_period, depth - 1)
+            else:
+                # Step 2: partition interior into cells
+                cells = _partition_grid(interior)
+                if len(cells) > 1:
+                    # Step 3: repair each cell
+                    for r0, c0, cell in cells:
+                        repaired = _repair_grid_periodic_lines(cell, axis, hint_period)
+                        cell[:] = repaired
+                else:
+                    # No partition — repair interior directly
+                    repaired = _repair_grid_periodic_lines(interior, axis, hint_period)
+                    interior[:] = repaired
+        return
+
+    # No frame: try partition at this level
+    cells = _partition_grid(grid)
+    if len(cells) > 1:
+        for r0, c0, cell in cells:
+            _repair_framed_cells_recursive(cell, axis, hint_period, depth - 1)
+
+
+register(
+    "repair_framed_lines",
+    OpSignature(
+        params=(
+            ("grid", Type.GRID),
+            ("axis", Type.INT),
+            ("hint_period", Type.INT),
+        ),
+        return_type=Type.GRID,
+    ),
+    _repair_framed_lines,
+)
+
+
+# ---------------------------------------------------------------------------
+# 2D motif primitives: infer tile → detect mismatch → repair
+# ---------------------------------------------------------------------------
+
+
+def _infer_2d_motif(
+    cell: Grid,
+    min_tile_h: int = 2,
+    max_tile_h: int = 8,
+) -> tuple[Grid, int, list[tuple[int, int]]] | None:
+    """Infer a 2D tiling motif from a cell by majority vote.
+
+    Tries vertical tile heights from min_tile_h to max_tile_h.
+    For each height, stacks all non-overlapping tiles and takes
+    the majority value at each (row, col) position.
+
+    Returns (motif, tile_height, violations) or None if:
+    - no tile height produces violations (cell is already perfect)
+    - violations exceed 1/3 of tile area × tile count (not a real tile)
+
+    violations is a list of (absolute_row, col) positions within the cell
+    that differ from the inferred motif.
+    """
+    from collections import Counter
+
+    rows, cols = cell.shape
+    best_motif = None
+    best_th = 0
+    best_violations: list[tuple[int, int]] = []
+    best_count = rows * cols  # worse than anything
+
+    for th in range(min_tile_h, min(max_tile_h + 1, rows)):
+        # Allow trimming up to th-1 trailing rows for clean divisibility
+        usable_rows = (rows // th) * th
+        n_tiles = usable_rows // th
+        if n_tiles < 2:
+            continue
+
+        # Majority-vote motif over usable rows only
+        motif = np.zeros((th, cols), dtype=np.uint8)
+        agreement = np.zeros((th, cols), dtype=int)
+        for r in range(th):
+            for c in range(cols):
+                vals = [int(cell[i * th + r, c]) for i in range(n_tiles)]
+                counts = Counter(vals)
+                majority_val, majority_count = counts.most_common(1)[0]
+                motif[r, c] = majority_val
+                agreement[r, c] = majority_count
+
+        # Violations: only at positions where ALL other tiles unanimously agree
+        # (agreement == n_tiles means the violating tile is the only outlier)
+        violations = []
+        for i in range(n_tiles):
+            for r in range(th):
+                for c in range(cols):
+                    if int(cell[i * th + r, c]) != int(motif[r, c]):
+                        # This tile disagrees. Check: do all OTHER tiles agree?
+                        # agreement[r,c] counts total agreeing tiles.
+                        # If agreement == n_tiles - 1, this IS the only outlier.
+                        if agreement[r, c] == n_tiles - 1:
+                            violations.append((i * th + r, c))
+
+        if not violations:
+            continue
+        if len(violations) > (n_tiles * th * cols) // 3:
+            continue
+
+        if len(violations) < best_count:
+            best_count = len(violations)
+            best_th = th
+            best_motif = motif
+            best_violations = violations
+
+    if best_motif is None:
+        return None
+
+    return best_motif, best_th, best_violations
+
+
+def _repair_2d_cell(
+    cell: Grid, motif: Grid, tile_h: int,
+    violations: list[tuple[int, int]] | None = None,
+) -> Grid:
+    """Repair a cell by replacing only violation positions with motif values.
+
+    If violations is provided, only those positions are repaired.
+    Otherwise, all positions differing from the motif are repaired.
+    """
+    result = cell.copy()
+    if violations is not None:
+        for r, c in violations:
+            result[r, c] = motif[r % tile_h, c]
+    else:
+        n_tiles = result.shape[0] // tile_h
+        for i in range(n_tiles):
+            for r in range(tile_h):
+                for c in range(result.shape[1]):
+                    result[i * tile_h + r, c] = motif[r, c]
+    return result
+
+
+def _repair_framed_2d_motif(grid: Grid) -> Grid:
+    """2D motif repair — for cells with genuine 2D tiling structure.
+
+    Only repairs pixels where the majority vote is unanimous except for
+    the violating tile position (i.e., N-1 out of N tiles agree).
+    """
+    result = grid.copy()
+    _repair_framed_2d_recursive(result, depth=3)
+    return result
+
+
+def _repair_framed_2d_recursive(grid: Grid, depth: int) -> None:
+    """Recursive peel→partition→2D-motif-repair (in-place)."""
+    if depth <= 0:
+        return
+
+    rows, cols = grid.shape
+    if rows < 2 or cols < 2:
+        return
+
+    # Step 1: detect and peel frame
+    frame_color = _detect_frame_color(grid)
+    if frame_color is not None and rows >= 3 and cols >= 3:
+        interior = grid[1:rows - 1, 1:cols - 1]
+        if interior.size > 0:
+            inner_frame = _detect_frame_color(interior)
+            if inner_frame is not None and depth > 1:
+                _repair_framed_2d_recursive(interior, depth - 1)
+            else:
+                # Step 2: partition interior
+                cells = _partition_grid(interior)
+                if len(cells) > 1:
+                    for _, _, cell in cells:
+                        _repair_cell_2d_or_1d(cell)
+                else:
+                    _repair_cell_2d_or_1d(interior)
+        return
+
+    # No frame: partition and recurse
+    cells = _partition_grid(grid)
+    if len(cells) > 1:
+        for _, _, cell in cells:
+            _repair_framed_2d_recursive(cell, depth - 1)
+
+
+def _repair_cell_2d_or_1d(cell: Grid) -> None:
+    """Try 2D motif repair first; fall back to 1D line repair.
+
+    Strips uniform border rows/cols before motif inference. Handles
+    cells that include separator/frame borders on some sides.
+    """
+    rows, cols = cell.shape
+
+    # Try peeling full frame first
+    fc = _detect_frame_color(cell)
+    if fc is not None and rows >= 3 and cols >= 3:
+        interior = cell[1:rows - 1, 1:cols - 1]
+        _repair_cell_2d_or_1d(interior)
+        return
+
+    # Strip uniform top/bottom rows (partial frame from separators)
+    r_lo, r_hi = 0, rows
+    while r_lo < r_hi and len(set(int(cell[r_lo, c]) for c in range(cols))) == 1:
+        r_lo += 1
+    while r_hi > r_lo and len(set(int(cell[r_hi - 1, c]) for c in range(cols))) == 1:
+        r_hi -= 1
+    # Strip uniform left/right cols
+    c_lo, c_hi = 0, cols
+    while c_lo < c_hi and len(set(int(cell[r, c_lo]) for r in range(r_lo, r_hi))) == 1:
+        c_lo += 1
+    while c_hi > c_lo and len(set(int(cell[r, c_hi - 1]) for r in range(r_lo, r_hi))) == 1:
+        c_hi -= 1
+
+    if r_lo < r_hi and c_lo < c_hi and (r_lo > 0 or r_hi < rows or c_lo > 0 or c_hi < cols):
+        content = cell[r_lo:r_hi, c_lo:c_hi]
+        if content.size >= 4:
+            _repair_cell_2d_or_1d(content)
+            return
+
+    # Try 2D motif repair — very conservative:
+    # - Must have ≥4 tile repetitions
+    # - Must have genuine 2D structure (≥2 distinct rows in motif)
+    # - Violations must be very few (≤ 1 per tile on average)
+    # - Each violation must have UNANIMOUS agreement from all other tiles
+    rows_h, cols_w = cell.shape
+    if rows_h >= 6 and cols_w >= 2:
+        motif_info = _infer_2d_motif(cell)
+        if motif_info is not None:
+            motif, tile_h, violations = motif_info
+            usable = (rows_h // tile_h) * tile_h
+            n_tiles = usable // tile_h
+            unique_rows = len(set(tuple(int(v) for v in motif[r]) for r in range(tile_h)))
+            if (unique_rows >= 2
+                    and n_tiles >= 4
+                    and len(violations) >= 2
+                    and len(violations) <= n_tiles):
+                repaired = _repair_2d_cell(cell, motif, tile_h, violations)
+                cell[:] = repaired
+
+
+register(
+    "repair_framed_2d_motif",
+    OpSignature(
+        params=(("grid", Type.GRID),),
+        return_type=Type.GRID,
+    ),
+    _repair_framed_2d_motif,
+)

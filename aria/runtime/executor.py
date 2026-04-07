@@ -13,6 +13,7 @@ from aria.types import (
     Bind,
     Call,
     Expr,
+    ForEach,
     Grid,
     Lambda,
     Literal,
@@ -188,6 +189,66 @@ def execute(
                 ) from exc
             if not result:
                 raise ExecutionError(f"Step {idx}: assertion failed")
+
+        elif isinstance(step, ForEach):
+            # Evaluate the entity source
+            try:
+                source_val = eval_expr(step.source, env)
+            except Exception as exc:
+                raise ExecutionError(
+                    f"Step {idx} (for_each): source eval failed: {exc}"
+                ) from exc
+
+            # Coerce to sorted list for deterministic iteration
+            if isinstance(source_val, (set, frozenset)):
+                entities = sorted(source_val, key=lambda o: o.id)
+            elif isinstance(source_val, (list, tuple)):
+                entities = list(source_val)
+            else:
+                raise ExecutionError(
+                    f"Step {idx} (for_each): source must be iterable, got {type(source_val).__name__}"
+                )
+
+            # Get initial accumulator grid
+            if step.accumulator not in env:
+                raise ExecutionError(
+                    f"Step {idx} (for_each): accumulator '{step.accumulator}' not found"
+                )
+            acc_grid = env[step.accumulator]
+
+            for entity in entities:
+                # Create body environment with entity binding + current accumulator
+                body_env = {**env, step.iter_name: entity, step.accumulator: acc_grid}
+
+                # Execute body steps; Assert failure skips this entity
+                skip = False
+                for body_step in step.body:
+                    if isinstance(body_step, Bind):
+                        try:
+                            value = eval_expr(body_step.expr, body_env)
+                        except Exception:
+                            skip = True
+                            break
+                        body_env[body_step.name] = value
+                    elif isinstance(body_step, Assert):
+                        try:
+                            result = eval_expr(body_step.pred, body_env)
+                        except Exception:
+                            skip = True
+                            break
+                        if not result:
+                            skip = True
+                            break
+
+                if skip:
+                    continue
+
+                # Find the last GRID-typed value in the body as the new accumulator
+                # Convention: the last Bind that wrote to the accumulator name
+                if step.accumulator in body_env:
+                    acc_grid = body_env[step.accumulator]
+
+            env[step.output_name] = acc_grid
 
         else:
             raise ExecutionError(

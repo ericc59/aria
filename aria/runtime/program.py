@@ -13,6 +13,7 @@ from aria.types import (
     Bind,
     Call,
     Expr,
+    ForEach,
     Lambda,
     Literal,
     Program,
@@ -103,6 +104,13 @@ def _step_to_text(step: Step) -> str:
         return f"let {step.name}: {step.typ.name} = {_expr_to_text(step.expr)}"
     if isinstance(step, Assert):
         return f"assert {_expr_to_text(step.pred)}"
+    if isinstance(step, ForEach):
+        header = (
+            f"for_each {step.iter_name} in {_expr_to_text(step.source)} "
+            f"acc {step.accumulator} -> {step.output_name}:"
+        )
+        body_lines = [f"  {_step_to_text(s)}" for s in step.body]
+        return header + "\n" + "\n".join(body_lines)
     raise TypeError(f"Unknown step type: {type(step)}")
 
 

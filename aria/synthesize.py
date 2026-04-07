@@ -32,9 +32,11 @@ from aria.types import (
     DemoPair,
     Dir,
     Expr,
+    ForEach,
     Grid,
     Literal,
     Program,
+    Property,
     Ref,
     Type,
 )
@@ -60,6 +62,15 @@ class Observation:
 
 
 _ENV = {"input": Type.GRID, "ctx": Type.TASK_CTX}
+
+
+_VALUE_ALGEBRA_TEMPLATES_ENABLED = True
+
+
+def set_value_algebra_templates(enabled: bool) -> None:
+    """Toggle Phase 5 value-algebra templates for A/B comparison."""
+    global _VALUE_ALGEBRA_TEMPLATES_ENABLED
+    _VALUE_ALGEBRA_TEMPLATES_ENABLED = enabled
 
 
 def synthesize_from_observations(
@@ -137,6 +148,50 @@ def synthesize_from_observations(
         text = program_to_text(program)
         observations.append(Observation(
             kind="difference", program_text=text,
+            passed=result.passed, source=source,
+        ))
+        if result.passed:
+            return SynthesisResult(
+                solved=True, winning_program=program,
+                candidates_tested=tested,
+                observations=tuple(observations),
+            )
+
+    # Phase 5: value-algebra templates — multi-step programs using
+    # structure-derived parameterization (select → derive → act)
+    if not _VALUE_ALGEBRA_TEMPLATES_ENABLED:
+        return SynthesisResult(
+            solved=False, winning_program=None,
+            candidates_tested=tested,
+            observations=tuple(observations),
+        )
+    for program, source in _value_algebra_templates(demos, literal_pool):
+        if type_check(program, initial_env=dict(_ENV)):
+            continue
+        tested += 1
+        result = verify(program, demos)
+        text = program_to_text(program)
+        observations.append(Observation(
+            kind="value_algebra", program_text=text,
+            passed=result.passed, source=source,
+        ))
+        if result.passed:
+            return SynthesisResult(
+                solved=True, winning_program=program,
+                candidates_tested=tested,
+                observations=tuple(observations),
+            )
+
+    # Phase 6: correspondence-based templates — ForEach over matched
+    # entity pairs using touching/nearest to derive action parameters
+    for program, source in _correspondence_templates(demos, literal_pool):
+        if type_check(program, initial_env=dict(_ENV)):
+            continue
+        tested += 1
+        result = verify(program, demos)
+        text = program_to_text(program)
+        observations.append(Observation(
+            kind="correspondence", program_text=text,
             passed=result.passed, source=source,
         ))
         if result.passed:
@@ -414,3 +469,381 @@ def _lit_str(lit: Literal) -> str:
     if hasattr(v, "name"):
         return v.name
     return repr(v)
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: Value-algebra templates
+# ---------------------------------------------------------------------------
+
+
+def _value_algebra_templates(demos: tuple[DemoPair, ...], literal_pool):
+    """Targeted multi-step programs using value-algebra ops.
+
+    These templates directly test common ARC patterns that require
+    structure-derived parameterization:
+      - crop to union_bbox of selected objects
+      - extract largest/smallest object
+      - stamp objects after derived movement
+      - cover + repaint with derived colors
+      - connect objects with their color
+      - paint boundary/interior cells
+    """
+    if not demos:
+        return
+
+    demo = demos[0]
+    inp, out = demo.input, demo.output
+    same_shape = inp.shape == out.shape
+
+    colors = [lit for lit in literal_pool.get(Type.COLOR, ())]
+    properties = [
+        Literal(Property.SIZE, Type.PROPERTY),
+        Literal(Property.COLOR, Type.PROPERTY),
+        Literal(Property.POS_X, Type.PROPERTY),
+        Literal(Property.POS_Y, Type.PROPERTY),
+    ]
+
+    # --- Template family 1: crop to bbox of selected objects ---
+    # crop(input, union_bbox(where(by_color(c), find_objects(input))))
+    if not same_shape:
+        for color_lit in colors[:10]:
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                    Bind("pred", Type.PREDICATE, Call("by_color", (color_lit,))),
+                    Bind("sel", Type.OBJECT_SET, Call("where", (Ref("pred"), Ref("objs")))),
+                    Bind("bbox", Type.REGION, Call("union_bbox", (Ref("sel"),))),
+                    Bind("v0", Type.GRID, Call("crop", (Ref("input"), Ref("bbox")))),
+                ], "v0"),
+                f"crop_to_color_bbox({_lit_str(color_lit)})",
+            )
+
+    # --- Template family 2: extract argmax/argmin object as grid ---
+    # from_object(argmax_by(SIZE, find_objects(input)))
+    if not same_shape:
+        for prop_lit in properties:
+            for func in ("argmax_by", "argmin_by"):
+                yield (
+                    _prog([
+                        Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                        Bind("sel", Type.OBJECT, Call(func, (prop_lit, Ref("objs")))),
+                        Bind("v0", Type.GRID, Call("subgrid_of", (Ref("sel"), Ref("input")))),
+                    ], "v0"),
+                    f"subgrid_of_{func}({_lit_str(prop_lit)})",
+                )
+                yield (
+                    _prog([
+                        Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                        Bind("sel", Type.OBJECT, Call(func, (prop_lit, Ref("objs")))),
+                        Bind("v0", Type.GRID, Call("from_object", (Ref("sel"),))),
+                    ], "v0"),
+                    f"from_object_{func}({_lit_str(prop_lit)})",
+                )
+
+    # --- Template family 3: stamp objects after movement by property ---
+    # for_each obj: translate_delta(negate(get_height(obj)), 0, obj) → stamp
+    if same_shape:
+        for dr_fn, dc_fn, desc in [
+            ("get_height", None, "move_up_by_height"),
+            ("get_width", None, "move_left_by_width"),
+            (None, "get_height", "move_left_by_height_as_dc"),
+            (None, "get_width", "move_up_by_width_as_dr"),
+        ]:
+            body_steps = []
+            if dr_fn is not None:
+                body_steps.append(Bind("_dr", Type.INT, Call(dr_fn, (Ref("obj"),))))
+                body_steps.append(Bind("dr", Type.INT, Call("negate", (Ref("_dr"),))))
+            else:
+                body_steps.append(Bind("dr", Type.INT, Literal(0, Type.INT)))
+            if dc_fn is not None:
+                body_steps.append(Bind("_dc", Type.INT, Call(dc_fn, (Ref("obj"),))))
+                body_steps.append(Bind("dc", Type.INT, Call("negate", (Ref("_dc"),))))
+            else:
+                body_steps.append(Bind("dc", Type.INT, Literal(0, Type.INT)))
+
+            body_steps.append(
+                Bind("moved", Type.OBJECT, Call("translate_delta", (Ref("dr"), Ref("dc"), Ref("obj"))))
+            )
+            body_steps.append(
+                Bind("canvas", Type.GRID, Call("stamp", (Ref("moved"), Ref("canvas"))))
+            )
+
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                    Bind("canvas", Type.GRID, Call("new_grid", (
+                        Call("dims_of", (Ref("input"),)),
+                        Literal(0, Type.COLOR),
+                    ))),
+                    ForEach(
+                        iter_name="obj",
+                        source=Ref("objs"),
+                        body=tuple(body_steps),
+                        accumulator="canvas",
+                        output_name="v0",
+                    ),
+                ], "v0"),
+                f"foreach_{desc}",
+            )
+
+    # --- Template family 4: cover objects + stamp with derived recolor ---
+    # Recolor each object to the dominant color of its region's neighbors
+    if same_shape:
+        for bg_lit in colors[:3]:
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                    ForEach(
+                        iter_name="obj",
+                        source=Ref("objs"),
+                        body=(
+                            Bind("sub", Type.GRID, Call("subgrid_of", (Ref("obj"), Ref("input")))),
+                            Bind("dc", Type.COLOR, Call("dominant_color_in", (Ref("sub"), bg_lit))),
+                            Bind("painted", Type.OBJECT, Call("recolor", (Ref("dc"), Ref("obj")))),
+                            Bind("canvas", Type.GRID, Call("stamp", (Ref("painted"), Ref("canvas")))),
+                        ),
+                        accumulator="canvas",
+                        output_name="v0",
+                    ),
+                ], "v0"),
+                f"recolor_by_dominant({_lit_str(bg_lit)})",
+            )
+
+    # --- Template family 5: connect all same-color object pairs ---
+    if same_shape:
+        for color_lit in colors[:5]:
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                    Bind("pred", Type.PREDICATE, Call("by_color", (color_lit,))),
+                    Bind("sel", Type.OBJECT_SET, Call("where", (Ref("pred"), Ref("objs")))),
+                    ForEach(
+                        iter_name="obj",
+                        source=Ref("sel"),
+                        body=(
+                            Bind("near", Type.OBJECT, Call("nearest_to", (Ref("obj"), Ref("sel")))),
+                            Bind("canvas", Type.GRID, Call("connect_paint", (
+                                Ref("obj"), Ref("near"), color_lit, Ref("canvas"),
+                            ))),
+                        ),
+                        accumulator="canvas",
+                        output_name="v0",
+                    ),
+                ], "v0"),
+                f"connect_same_color({_lit_str(color_lit)})",
+            )
+
+    # --- Template family 6: paint boundary of largest object ---
+    if same_shape:
+        for color_lit in colors[:5]:
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                    Bind("big", Type.OBJECT, Call("argmax_by", (
+                        Literal(Property.SIZE, Type.PROPERTY), Ref("objs"),
+                    ))),
+                    Bind("bcells", Type.REGION, Call("boundary", (Ref("big"),))),
+                    Bind("v0", Type.GRID, Call("paint_cells", (Ref("bcells"), color_lit, Ref("input")))),
+                ], "v0"),
+                f"paint_boundary_largest({_lit_str(color_lit)})",
+            )
+
+    # --- Template family 7: cover all objects of one color ---
+    if same_shape:
+        for color_lit in colors[:8]:
+            for bg_lit in colors[:3]:
+                if color_lit.value == bg_lit.value:
+                    continue
+                yield (
+                    _prog([
+                        Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                        Bind("pred", Type.PREDICATE, Call("by_color", (color_lit,))),
+                        Bind("sel", Type.OBJECT_SET, Call("where", (Ref("pred"), Ref("objs")))),
+                        ForEach(
+                            iter_name="obj",
+                            source=Ref("sel"),
+                            body=(
+                                Bind("canvas", Type.GRID, Call("cover_obj", (Ref("obj"), bg_lit, Ref("canvas")))),
+                            ),
+                            accumulator="canvas",
+                            output_name="v0",
+                        ),
+                    ], "v0"),
+                    f"cover_color({_lit_str(color_lit)},bg={_lit_str(bg_lit)})",
+                )
+
+    # --- Template family 8: crop to bbox of argmax/argmin object ---
+    if not same_shape:
+        for prop_lit in properties:
+            for func in ("argmax_by", "argmin_by"):
+                yield (
+                    _prog([
+                        Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                        Bind("sel", Type.OBJECT, Call(func, (prop_lit, Ref("objs")))),
+                        Bind("bbox", Type.REGION, Call("obj_bbox_region", (Ref("sel"),))),
+                        Bind("v0", Type.GRID, Call("crop", (Ref("input"), Ref("bbox")))),
+                    ], "v0"),
+                    f"crop_to_{func}({_lit_str(prop_lit)})",
+                )
+
+
+# ---------------------------------------------------------------------------
+# Phase 6: Correspondence-based templates
+# ---------------------------------------------------------------------------
+
+
+def _correspondence_templates(demos: tuple[DemoPair, ...], literal_pool):
+    """Correspondence-based ForEach programs.
+
+    Pattern: select two entity subsets (e.g. singletons + non-singletons),
+    match each entity in set A to a partner in set B via a spatial relation
+    (touching, nearest), derive action parameter from partner (color),
+    apply action to source entity.
+
+    Covers: recolor-by-adjacent-partner, recolor-by-nearest-partner.
+    """
+    if not demos:
+        return
+
+    demo = demos[0]
+    inp, out = demo.input, demo.output
+    if inp.shape != out.shape:
+        return
+
+    colors = [lit for lit in literal_pool.get(Type.COLOR, ())]
+
+    # --- Family 1: recolor non-singletons to touching singleton's color ---
+    # ForEach obj in non_singletons: recolor(get_color(touching(obj, singletons)), obj)
+    for match_fn in ("touching", "nearest_to"):
+        yield (
+            _prog([
+                Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                Bind("sings", Type.OBJECT_SET,
+                     Call("filter_singletons", (Ref("objs"),))),
+                Bind("bigs", Type.OBJECT_SET,
+                     Call("filter_non_singletons", (Ref("objs"),))),
+                Bind("canvas", Type.GRID, Ref("input")),
+                ForEach(
+                    iter_name="obj",
+                    source=Ref("bigs"),
+                    body=(
+                        Bind("partner", Type.OBJECT,
+                             Call(match_fn, (Ref("obj"), Ref("sings")))),
+                        Bind("c", Type.COLOR,
+                             Call("get_color", (Ref("partner"),))),
+                        Bind("painted", Type.OBJECT,
+                             Call("recolor", (Ref("c"), Ref("obj")))),
+                        Bind("canvas", Type.GRID,
+                             Call("stamp", (Ref("painted"), Ref("canvas")))),
+                    ),
+                    accumulator="canvas",
+                    output_name="v0",
+                ),
+            ], "v0"),
+            f"recolor_non_singletons_by_{match_fn}_singleton",
+        )
+
+    # --- Family 2: recolor singletons to touching non-singleton's color ---
+    for match_fn in ("touching", "nearest_to"):
+        yield (
+            _prog([
+                Bind("objs", Type.OBJECT_SET, Call("find_objects", (Ref("input"),))),
+                Bind("sings", Type.OBJECT_SET,
+                     Call("filter_singletons", (Ref("objs"),))),
+                Bind("bigs", Type.OBJECT_SET,
+                     Call("filter_non_singletons", (Ref("objs"),))),
+                Bind("canvas", Type.GRID, Ref("input")),
+                ForEach(
+                    iter_name="obj",
+                    source=Ref("sings"),
+                    body=(
+                        Bind("partner", Type.OBJECT,
+                             Call(match_fn, (Ref("obj"), Ref("bigs")))),
+                        Bind("c", Type.COLOR,
+                             Call("get_color", (Ref("partner"),))),
+                        Bind("painted", Type.OBJECT,
+                             Call("recolor", (Ref("c"), Ref("obj")))),
+                        Bind("canvas", Type.GRID,
+                             Call("stamp", (Ref("painted"), Ref("canvas")))),
+                    ),
+                    accumulator="canvas",
+                    output_name="v0",
+                ),
+            ], "v0"),
+            f"recolor_singletons_by_{match_fn}_non_singleton",
+        )
+
+    # --- Family 3: recolor by-color subsets to touching partner's color ---
+    # For each color C, recolor objects of color C to the color of their
+    # touching/nearest partner from the remaining objects
+    for color_lit in colors[:8]:
+        for match_fn in ("touching", "nearest_to"):
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET,
+                         Call("find_objects", (Ref("input"),))),
+                    Bind("pred", Type.PREDICATE,
+                         Call("by_color", (color_lit,))),
+                    Bind("targets", Type.OBJECT_SET,
+                         Call("where", (Ref("pred"), Ref("objs")))),
+                    Bind("others", Type.OBJECT_SET,
+                         Call("excluding", (Ref("targets"), Ref("objs")))),
+                    Bind("canvas", Type.GRID, Ref("input")),
+                    ForEach(
+                        iter_name="obj",
+                        source=Ref("targets"),
+                        body=(
+                            Bind("partner", Type.OBJECT,
+                                 Call(match_fn, (Ref("obj"), Ref("others")))),
+                            Bind("c", Type.COLOR,
+                                 Call("get_color", (Ref("partner"),))),
+                            Bind("painted", Type.OBJECT,
+                                 Call("recolor", (Ref("c"), Ref("obj")))),
+                            Bind("canvas", Type.GRID,
+                                 Call("stamp",
+                                      (Ref("painted"), Ref("canvas")))),
+                        ),
+                        accumulator="canvas",
+                        output_name="v0",
+                    ),
+                ], "v0"),
+                f"recolor_color_{_lit_str(color_lit)}_by_{match_fn}_partner",
+            )
+
+    # --- Family 4: for each color-filtered non-singleton, recolor to
+    # touching singleton's color (color-specific subset) ---
+    for color_lit in colors[:8]:
+        for match_fn in ("touching", "nearest_to"):
+            yield (
+                _prog([
+                    Bind("objs", Type.OBJECT_SET,
+                         Call("find_objects", (Ref("input"),))),
+                    Bind("sings", Type.OBJECT_SET,
+                         Call("filter_singletons", (Ref("objs"),))),
+                    Bind("bigs", Type.OBJECT_SET,
+                         Call("filter_non_singletons", (Ref("objs"),))),
+                    Bind("pred", Type.PREDICATE,
+                         Call("by_color", (color_lit,))),
+                    Bind("targets", Type.OBJECT_SET,
+                         Call("where", (Ref("pred"), Ref("bigs")))),
+                    Bind("canvas", Type.GRID, Ref("input")),
+                    ForEach(
+                        iter_name="obj",
+                        source=Ref("targets"),
+                        body=(
+                            Bind("partner", Type.OBJECT,
+                                 Call(match_fn, (Ref("obj"), Ref("sings")))),
+                            Bind("c", Type.COLOR,
+                                 Call("get_color", (Ref("partner"),))),
+                            Bind("painted", Type.OBJECT,
+                                 Call("recolor", (Ref("c"), Ref("obj")))),
+                            Bind("canvas", Type.GRID,
+                                 Call("stamp",
+                                      (Ref("painted"), Ref("canvas")))),
+                        ),
+                        accumulator="canvas",
+                        output_name="v0",
+                    ),
+                ], "v0"),
+                f"recolor_{_lit_str(color_lit)}_non_sings_by_{match_fn}_sing",
+            )

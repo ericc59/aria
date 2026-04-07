@@ -348,7 +348,26 @@ class Assert:
     pred: Expr
 
 
-Step = Bind | Assert
+@dataclass(frozen=True)
+class ForEach:
+    """Iterate over entities, applying body mutations to an accumulator grid.
+
+    Binds ``iter_name`` (Type.OBJECT) per iteration.  The body is a flat
+    sequence of Bind/Assert steps.  The last GRID-typed Bind in the body
+    supplies the updated accumulator for the next iteration.  After all
+    iterations, the final grid is bound to ``output_name``.
+
+    If an Assert in the body fails for a given entity, that entity is
+    skipped (no mutation) rather than aborting the whole program.
+    """
+    iter_name: str              # loop variable (OBJECT)
+    source: Expr                # evaluates to OBJECT_SET
+    body: tuple[Step, ...]      # Bind | Assert steps using iter_name
+    accumulator: str            # existing GRID binding threaded through
+    output_name: str            # name for the final accumulated GRID
+
+
+Step = Bind | Assert | ForEach
 
 
 @dataclass(frozen=True)
