@@ -42,6 +42,62 @@ class Ty(Enum):
     FACTS = auto()      # GridFacts (perception output: objects, separators, bg, dims)
     SELECTOR = auto()   # list[Predicate] — selects objects from facts
     BINDING = auto()    # (ObjFact, ObjFact) — a related pair (host/content, source/target)
+    TRANSITION = auto() # ObjectTransition — observed change between input/output object
+    TRANSITIONS = auto() # list[ObjectTransition] — all transitions for a demo
+
+
+# ---------------------------------------------------------------------------
+# Object transition — observed change between input and output
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ObjectTransition:
+    """An observed correspondence between an input and output object.
+
+    Bridges clause-style correspondence reasoning into the typed IR.
+    """
+    in_obj: Any         # ObjFact (input side, None if created)
+    out_obj: Any        # ObjFact (output side, None if removed)
+    match_type: str     # "identical", "recolored", "moved", "moved_recolored", "transformed", "modified", "removed", "new"
+    dr: int = 0         # row offset (out.row - in.row)
+    dc: int = 0         # col offset (out.col - in.col)
+    color_from: int = -1
+    color_to: int = -1
+    transform: str = None  # for "transformed": flip_h, flip_v, rot90, etc.
+
+
+def compute_transitions(in_facts, out_facts):
+    """Build ObjectTransition list from correspondence.
+
+    This is the typed bridge: correspondence output → first-class typed values.
+    """
+    from aria.guided.correspond import map_output_to_input, find_removed_objects
+
+    mappings = map_output_to_input(out_facts, in_facts)
+    transitions = []
+
+    for m in mappings:
+        dr = (m.out_obj.row - m.in_obj.row) if m.in_obj else 0
+        dc = (m.out_obj.col - m.in_obj.col) if m.in_obj else 0
+        transitions.append(ObjectTransition(
+            in_obj=m.in_obj,
+            out_obj=m.out_obj,
+            match_type=m.match_type,
+            dr=dr, dc=dc,
+            color_from=m.color_from,
+            color_to=m.color_to,
+            transform=m.transform,
+        ))
+
+    # Add removed objects
+    for in_obj in find_removed_objects(in_facts, mappings):
+        transitions.append(ObjectTransition(
+            in_obj=in_obj, out_obj=None,
+            match_type="removed",
+            color_from=in_obj.color, color_to=-1,
+        ))
+
+    return transitions
 
 
 # ---------------------------------------------------------------------------
@@ -153,8 +209,9 @@ def _build_op_library(bg=0):
     ))
 
     # --- Grid transforms (not just Region) ---
-    for xform_name, xfn in [('flip_h', lambda r: r[::-1, :]),
-                              ('flip_v', lambda r: r[:, ::-1]),
+    # flip_h = horizontal flip = reverse columns; flip_v = vertical flip = reverse rows
+    for xform_name, xfn in [('flip_h', lambda r: r[:, ::-1]),
+                              ('flip_v', lambda r: r[::-1, :]),
                               ('flip_hv', lambda r: r[::-1, ::-1]),
                               ('rot90', lambda r: np.rot90(r)),
                               ('rot180', lambda r: np.rot90(r, 2))]:
@@ -178,8 +235,8 @@ def _build_op_library(bg=0):
     ))
 
     # --- Transforms: Region → Region ---
-    for xform_name, xfn in [('flip_h', lambda r: r[::-1, :]),
-                              ('flip_v', lambda r: r[:, ::-1]),
+    for xform_name, xfn in [('flip_h', lambda r: r[:, ::-1]),
+                              ('flip_v', lambda r: r[::-1, :]),
                               ('flip_hv', lambda r: r[::-1, ::-1]),
                               ('rot90', lambda r: np.rot90(r)),
                               ('rot180', lambda r: np.rot90(r, 2)),
@@ -230,6 +287,28 @@ def _build_op_library(bg=0):
         'crop_content_bbox', (Ty.GRID, Ty.BINDING), Ty.REGION,
         lambda grid, b: prim_crop_bbox(grid, b[1]) if b else None,
         'crop content bounding box',
+    ))
+
+    # --- Transition accessors: Transition → derived values ---
+    ops.append(TypedOp(
+        'transition_source', (Ty.TRANSITION,), Ty.OBJECT,
+        lambda t: t.in_obj if t else None,
+        'get input object from transition',
+    ))
+    ops.append(TypedOp(
+        'transition_target', (Ty.TRANSITION,), Ty.OBJECT,
+        lambda t: t.out_obj if t else None,
+        'get output object from transition',
+    ))
+    ops.append(TypedOp(
+        'transition_color_to', (Ty.TRANSITION,), Ty.COLOR,
+        lambda t: t.color_to if t and t.color_to >= 0 else None,
+        'get output color from transition',
+    ))
+    ops.append(TypedOp(
+        'transition_color_from', (Ty.TRANSITION,), Ty.COLOR,
+        lambda t: t.color_from if t and t.color_from >= 0 else None,
+        'get input color from transition',
     ))
 
     return ops
@@ -732,6 +811,10 @@ def _bottom_up_search(demos, op_lib, max_depth):
     At each level, check if any value matches the output.
     Cross-demo: a value must match the output in ALL demos.
     """
+    # Infer output size rule (needed for different-shape task support)
+    from aria.guided.output_size import infer_output_size
+    size_rule = infer_output_size(demos)
+
     # Per-demo execution contexts
     contexts = []
     for inp, out in demos:
@@ -740,6 +823,7 @@ def _bottom_up_search(demos, op_lib, max_depth):
             'input': inp,
             'output': out,
             'facts': facts,
+            'size_rule': size_rule,
         }
         contexts.append(ctx)
 
@@ -801,6 +885,11 @@ def _bottom_up_search(demos, op_lib, max_depth):
     if writeback:
         return writeback
 
+    # Try transition-based programs: use correspondence to discover structure
+    transition_match = _search_transition_programs(contexts)
+    if transition_match:
+        return transition_match
+
     # Try conditional dispatch: selector A → op X, selector B → op Y
     cond_match = _search_conditional_dispatch(all_values, contexts)
     if cond_match:
@@ -844,6 +933,10 @@ def _add_selectors(seeds, facts):
         'sel_largest': [Predicate(Pred.IS_LARGEST)],
         'sel_smallest': [Predicate(Pred.IS_SMALLEST)],
         'sel_unique_color': [Predicate(Pred.UNIQUE_COLOR)],
+        'sel_topmost': [Predicate(Pred.IS_TOPMOST)],
+        'sel_bottommost': [Predicate(Pred.IS_BOTTOMMOST)],
+        'sel_leftmost': [Predicate(Pred.IS_LEFTMOST)],
+        'sel_rightmost': [Predicate(Pred.IS_RIGHTMOST)],
     }
 
     # Color-based selectors for each color present
@@ -852,8 +945,984 @@ def _add_selectors(seeds, facts):
         if (name, Ty.SELECTOR) not in seeds:
             selectors[name] = [Predicate(Pred.COLOR_EQ, obj.color)]
 
+    # Relational selectors (contained_by, contains, adjacent_to largest/smallest)
+    for rel, rel_name in [(Pred.CONTAINED_BY, 'inside'),
+                           (Pred.CONTAINS, 'hosts'),
+                           (Pred.ADJACENT_TO, 'near')]:
+        for inner_name, inner_pred in [('largest', Predicate(Pred.IS_LARGEST)),
+                                        ('smallest', Predicate(Pred.IS_SMALLEST))]:
+            sel = [Predicate(rel, inner_pred)]
+            # Only add if it selects at least one object
+            from aria.guided.dsl import prim_select
+            if prim_select(facts, sel):
+                selectors[f'sel_{rel_name}_{inner_name}'] = sel
+
     for name, preds in selectors.items():
         seeds[(name, Ty.SELECTOR)] = preds
+
+
+def _search_transition_programs(contexts):
+    """Search for programs by analyzing object transitions across demos.
+
+    Uses correspondence to build ObjectTransition values, then discovers
+    consistent patterns that can be expressed as typed programs.
+
+    This bridges the gap between clause-style correspondence reasoning
+    and typed program synthesis.
+    """
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    n_demos = len(contexts)
+    same_shape = all(ctx['input'].shape == ctx['output'].shape for ctx in contexts)
+    size_rule = contexts[0].get('size_rule')
+    if not same_shape and size_rule is None:
+        return None
+
+    # Compute transitions for all demos
+    all_transitions = []
+    for ctx in contexts:
+        in_facts = ctx['facts']
+        out_facts = perceive(ctx['output'])
+        transitions = compute_transitions(in_facts, out_facts)
+        all_transitions.append(transitions)
+
+    if not all_transitions[0]:
+        return None
+
+    # --- Strategy 1: Uniform transition ---
+    # All non-identical objects undergo the same action (e.g., all moved by same offset)
+    prog = _try_uniform_transition(all_transitions, contexts)
+    if prog:
+        return prog
+
+    # --- Strategy 2: Stamp/creation transitions ---
+    # New objects in output whose shape matches an input object = stamp at offset
+    prog = _try_stamp_transitions(all_transitions, contexts)
+    if prog:
+        return prog
+
+    # --- Strategy 3: Multi-group transition dispatch ---
+    # Different object groups undergo different transitions, partitioned by selectors
+    prog = _try_transition_dispatch(all_transitions, contexts)
+    if prog:
+        return prog
+
+    return None
+
+
+def _try_uniform_transition(all_transitions, contexts):
+    """Check if all non-identical transitions share the same action + parameters."""
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    for demo_transitions in all_transitions:
+        changed = [t for t in demo_transitions if t.match_type != 'identical']
+        if not changed:
+            continue
+
+        # All changed objects must have the same match_type
+        types = set(t.match_type for t in changed)
+        if len(types) != 1:
+            return None
+
+    # Check cross-demo consistency of the transition parameters
+    match_type = None
+    for demo_transitions in all_transitions:
+        changed = [t for t in demo_transitions if t.match_type != 'identical']
+        if not changed:
+            return None
+        types = set(t.match_type for t in changed)
+        if len(types) != 1:
+            return None
+        mt = next(iter(types))
+        if match_type is None:
+            match_type = mt
+        elif mt != match_type:
+            return None
+
+    if match_type == 'moved':
+        prog = _try_uniform_move(all_transitions, contexts)
+        if prog:
+            return prog
+        return _try_gravity_or_slide(all_transitions, contexts, 'moved')
+    if match_type == 'recolored':
+        return _try_uniform_recolor(all_transitions, contexts)
+    if match_type == 'transformed':
+        return _try_uniform_transform(all_transitions, contexts)
+    if match_type == 'moved_recolored':
+        prog = _try_uniform_move_recolor(all_transitions, contexts)
+        if prog:
+            return prog
+        return _try_gravity_or_slide(all_transitions, contexts, 'moved_recolored')
+
+    return None
+
+
+def _try_uniform_move(all_transitions, contexts):
+    """All changed objects moved by the same constant offset."""
+    offsets = set()
+    for demo_transitions in all_transitions:
+        moved = [t for t in demo_transitions if t.match_type == 'moved']
+        if not moved:
+            return None
+        demo_offsets = set((t.dr, t.dc) for t in moved)
+        if len(demo_offsets) != 1:
+            return None  # different objects moved different amounts
+        offsets.add(next(iter(demo_offsets)))
+
+    if len(offsets) != 1:
+        return None  # offset differs across demos
+    dr, dc = next(iter(offsets))
+
+    # Find selector for moved objects
+    ctx0 = contexts[0]
+    moved_oids = set(t.in_obj.oid for t in all_transitions[0] if t.match_type == 'moved')
+    sel = _find_transition_selector(moved_oids, ctx0['facts'])
+    if sel is None:
+        return None
+
+    def _make_fn(_sel, _dr, _dc):
+        def _exec(inp):
+            facts = perceive(inp)
+            bg = facts.bg
+            result = inp.copy()
+            targets = prim_select(facts, _sel)
+            # Clear original positions
+            for obj in targets:
+                for r in range(obj.height):
+                    for c in range(obj.width):
+                        if obj.mask[r, c]:
+                            result[obj.row + r, obj.col + c] = bg
+            # Place at new positions
+            for obj in targets:
+                for r in range(obj.height):
+                    for c in range(obj.width):
+                        if obj.mask[r, c]:
+                            nr, nc = obj.row + r + _dr, obj.col + c + _dc
+                            if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                result[nr, nc] = obj.color
+            return result
+        return _exec
+
+    fn = _make_fn(sel, dr, dc)
+    if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+        desc = _describe_selector(sel)
+        return _make_program(fn, f"synth: transition move [{desc}] by ({dr},{dc})")
+    return None
+
+
+def _try_gravity_or_slide(all_transitions, contexts, match_type):
+    """Handle movement where offset varies — gravity (to border) or slide (until collision)."""
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    # Detect gravity: all moved objects end up at the same border
+    # AND actually moved in that direction (not trivially at border due to full span)
+    for direction in ['down', 'up', 'right', 'left']:
+        consistent = True
+        any_actually_moved = False
+        for demo_idx, demo_transitions in enumerate(all_transitions):
+            moved = [t for t in demo_transitions if t.match_type == match_type]
+            if not moved:
+                consistent = False
+                break
+            rows, cols = contexts[demo_idx]['input'].shape
+            for t in moved:
+                o = t.out_obj
+                # Must be at the target border
+                at_border = False
+                if direction == 'down' and o.row + o.height == rows:
+                    at_border = True
+                elif direction == 'up' and o.row == 0:
+                    at_border = True
+                elif direction == 'right' and o.col + o.width == cols:
+                    at_border = True
+                elif direction == 'left' and o.col == 0:
+                    at_border = True
+                if not at_border:
+                    consistent = False
+                    break
+                # Must have moved in the matching direction
+                if direction == 'down' and t.dr > 0:
+                    any_actually_moved = True
+                elif direction == 'up' and t.dr < 0:
+                    any_actually_moved = True
+                elif direction == 'right' and t.dc > 0:
+                    any_actually_moved = True
+                elif direction == 'left' and t.dc < 0:
+                    any_actually_moved = True
+            if not consistent:
+                break
+        if not any_actually_moved:
+            consistent = False
+
+        if consistent:
+            ctx0 = contexts[0]
+            moved_oids = set(t.in_obj.oid for t in all_transitions[0] if t.match_type == match_type)
+            sel = _find_transition_selector(moved_oids, ctx0['facts'])
+            if sel is None:
+                continue
+
+            # Determine if recolored too
+            recolor = None
+            if match_type == 'moved_recolored':
+                colors = set(t.color_to for t in all_transitions[0] if t.match_type == match_type)
+                if len(colors) == 1:
+                    recolor = next(iter(colors))
+                else:
+                    continue
+
+            def _make_gravity_fn(_sel, _dir, _recolor):
+                def _exec(inp):
+                    facts = perceive(inp)
+                    bg = facts.bg
+                    result = inp.copy()
+                    targets = prim_select(facts, _sel)
+                    rows, cols = inp.shape
+                    for obj in targets:
+                        # Clear original
+                        for r in range(obj.height):
+                            for c in range(obj.width):
+                                if obj.mask[r, c]:
+                                    result[obj.row + r, obj.col + c] = bg
+                    for obj in targets:
+                        color = _recolor if _recolor is not None else obj.color
+                        if _dir == 'down':
+                            nr = rows - obj.height
+                        elif _dir == 'up':
+                            nr = 0
+                        elif _dir == 'right':
+                            nc = cols - obj.width
+                            nr = obj.row
+                        elif _dir == 'left':
+                            nc = 0
+                            nr = obj.row
+                        if _dir in ('down', 'up'):
+                            nc = obj.col
+                        for r in range(obj.height):
+                            for c in range(obj.width):
+                                if obj.mask[r, c]:
+                                    pr, pc = nr + r, nc + c
+                                    if 0 <= pr < rows and 0 <= pc < cols:
+                                        result[pr, pc] = color
+                    return result
+                return _exec
+
+            fn = _make_gravity_fn(sel, direction, recolor)
+            if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+                desc = _describe_selector(sel)
+                rc_desc = f' recolor({recolor})' if recolor else ''
+                return _make_program(fn, f"synth: transition gravity({direction}) [{desc}]{rc_desc}")
+
+    # Detect slide: objects move in a consistent direction until hitting non-bg
+    for direction in ['down', 'up', 'right', 'left']:
+        consistent = True
+        for demo_transitions in all_transitions:
+            moved = [t for t in demo_transitions if t.match_type == match_type]
+            if not moved:
+                consistent = False
+                break
+            for t in moved:
+                # Check direction consistency
+                if direction == 'down' and t.dr <= 0:
+                    consistent = False
+                elif direction == 'up' and t.dr >= 0:
+                    consistent = False
+                elif direction == 'right' and t.dc <= 0:
+                    consistent = False
+                elif direction == 'left' and t.dc >= 0:
+                    consistent = False
+                if not consistent:
+                    break
+            if not consistent:
+                break
+
+        if not consistent:
+            continue
+
+        ctx0 = contexts[0]
+        moved_oids = set(t.in_obj.oid for t in all_transitions[0] if t.match_type == match_type)
+        sel = _find_transition_selector(moved_oids, ctx0['facts'])
+        if sel is None:
+            continue
+
+        recolor = None
+        if match_type == 'moved_recolored':
+            colors = set(t.color_to for t in all_transitions[0] if t.match_type == match_type)
+            if len(colors) == 1:
+                recolor = next(iter(colors))
+            else:
+                continue
+
+        def _make_slide_fn(_sel, _dir, _recolor):
+            def _exec(inp):
+                facts = perceive(inp)
+                bg = facts.bg
+                result = inp.copy()
+                targets = prim_select(facts, _sel)
+                rows, cols = inp.shape
+                dr = {'down': 1, 'up': -1, 'right': 0, 'left': 0}[_dir]
+                dc = {'down': 0, 'up': 0, 'right': 1, 'left': -1}[_dir]
+                for obj in targets:
+                    # Clear original
+                    for r in range(obj.height):
+                        for c in range(obj.width):
+                            if obj.mask[r, c]:
+                                result[obj.row + r, obj.col + c] = bg
+                for obj in targets:
+                    color = _recolor if _recolor is not None else obj.color
+                    # Slide until hitting non-bg or border
+                    shift = _compute_slide_shift(obj, dr, dc, inp, bg, rows, cols)
+                    for r in range(obj.height):
+                        for c in range(obj.width):
+                            if obj.mask[r, c]:
+                                pr = obj.row + r + shift * dr
+                                pc = obj.col + c + shift * dc
+                                if 0 <= pr < rows and 0 <= pc < cols:
+                                    result[pr, pc] = color
+                return result
+            return _exec
+
+        fn = _make_slide_fn(sel, direction, recolor)
+        if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+            desc = _describe_selector(sel)
+            rc_desc = f' recolor({recolor})' if recolor else ''
+            return _make_program(fn, f"synth: transition slide({direction}) [{desc}]{rc_desc}")
+
+    return None
+
+
+def _compute_slide_shift(obj, dr, dc, grid, bg, rows, cols):
+    """Compute how far an object can slide in direction (dr,dc) before hitting non-bg."""
+    max_shift = max(rows, cols)
+    for shift in range(1, max_shift):
+        for r in range(obj.height):
+            for c in range(obj.width):
+                if obj.mask[r, c]:
+                    pr = obj.row + r + shift * dr
+                    pc = obj.col + c + shift * dc
+                    if pr < 0 or pr >= rows or pc < 0 or pc >= cols:
+                        return shift - 1
+                    # Check if target cell is non-bg AND not part of this object
+                    if grid[pr, pc] != bg:
+                        # Is this cell part of the same object?
+                        lr, lc = pr - obj.row, pc - obj.col
+                        if 0 <= lr < obj.height and 0 <= lc < obj.width and obj.mask[lr, lc]:
+                            continue  # same object cell — keep going
+                        return shift - 1
+    return max_shift - 1
+
+
+def _try_uniform_transform(all_transitions, contexts):
+    """All changed objects undergo the same geometric transform in place."""
+    from aria.guided.dsl import prim_select
+
+    # Check: all transformed objects use the same transform across all demos
+    xforms = set()
+    for demo_transitions in all_transitions:
+        transformed = [t for t in demo_transitions if t.match_type == 'transformed']
+        if not transformed:
+            return None
+        demo_xforms = set(t.transform for t in transformed)
+        if len(demo_xforms) != 1:
+            return None
+        xforms.add(next(iter(demo_xforms)))
+
+    if len(xforms) != 1:
+        return None
+    xform = next(iter(xforms))
+
+    # Find selector for transformed objects
+    ctx0 = contexts[0]
+    xform_oids = set(t.in_obj.oid for t in all_transitions[0] if t.match_type == 'transformed')
+    sel = _find_transition_selector(xform_oids, ctx0['facts'])
+    if sel is None:
+        return None
+
+    _xform_fns = {
+        'flip_h': lambda m: m[:, ::-1],
+        'flip_v': lambda m: m[::-1, :],
+        'flip_hv': lambda m: m[::-1, ::-1],
+        'rot90': lambda m: np.rot90(m),
+        'rot180': lambda m: np.rot90(m, 2),
+        'rot270': lambda m: np.rot90(m, 3),
+    }
+
+    def _make_fn(_sel, _xform):
+        def _exec(inp):
+            facts = perceive(inp)
+            bg = facts.bg
+            result = inp.copy()
+            targets = prim_select(facts, _sel)
+            xfn = _xform_fns.get(_xform)
+            if xfn is None:
+                return result
+            for obj in targets:
+                # Clear original
+                for r in range(obj.height):
+                    for c in range(obj.width):
+                        if obj.mask[r, c]:
+                            result[obj.row + r, obj.col + c] = bg
+                # Place transformed
+                new_mask = xfn(obj.mask)
+                mh, mw = new_mask.shape
+                for r in range(mh):
+                    for c in range(mw):
+                        if new_mask[r, c]:
+                            nr, nc = obj.row + r, obj.col + c
+                            if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                result[nr, nc] = obj.color
+            return result
+        return _exec
+
+    fn = _make_fn(sel, xform)
+    if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+        desc = _describe_selector(sel)
+        return _make_program(fn, f"synth: transition transform({xform}) [{desc}]")
+    return None
+
+
+def _try_uniform_recolor(all_transitions, contexts):
+    """All changed objects recolored — check if new color is derivable."""
+    # Check: constant color across all demos?
+    colors = set()
+    for demo_transitions in all_transitions:
+        recolored = [t for t in demo_transitions if t.match_type == 'recolored']
+        for t in recolored:
+            colors.add(t.color_to)
+
+    if len(colors) == 1:
+        # Constant recolor — clause engine likely handles this
+        return None  # let clause engine handle it
+
+    # Variable color — check if it's derivable from a support object
+    # For each demo, find what the new color is and where it comes from
+    for demo_idx, demo_transitions in enumerate(all_transitions):
+        recolored = [t for t in demo_transitions if t.match_type == 'recolored']
+        if not recolored:
+            return None
+        demo_colors = set(t.color_to for t in recolored)
+        if len(demo_colors) != 1:
+            return None  # different objects get different colors in same demo
+
+    # All recolored objects get the same color per demo, but it varies across demos
+    # Check: is this color = color of a structurally identifiable support object?
+    ctx0 = contexts[0]
+    demo0_color = next(iter(set(t.color_to for t in all_transitions[0] if t.match_type == 'recolored')))
+
+    # Find which object has this color in the input
+    from aria.guided.clause import Predicate, Pred
+    source_preds = None
+    for pred_list in [[Predicate(Pred.IS_LARGEST)], [Predicate(Pred.IS_SMALLEST)],
+                       [Predicate(Pred.UNIQUE_COLOR)]]:
+        support = prim_select(ctx0['facts'], pred_list)
+        if support and support[0].color == demo0_color:
+            # Verify across demos
+            consistent = True
+            for i, ctx in enumerate(contexts[1:], 1):
+                demo_color = next(iter(set(t.color_to for t in all_transitions[i] if t.match_type == 'recolored')))
+                s = prim_select(ctx['facts'], pred_list)
+                if not s or s[0].color != demo_color:
+                    consistent = False
+                    break
+            if consistent:
+                source_preds = pred_list
+                break
+
+    if source_preds is None:
+        return None
+
+    # Find selector for recolored objects
+    recolor_oids = set(t.in_obj.oid for t in all_transitions[0] if t.match_type == 'recolored')
+    sel = _find_transition_selector(recolor_oids, ctx0['facts'])
+    if sel is None:
+        return None
+
+    def _make_fn(_sel, _src_preds):
+        def _exec(inp):
+            facts = perceive(inp)
+            result = inp.copy()
+            support = prim_select(facts, _src_preds)
+            if not support:
+                return result
+            new_color = support[0].color
+            targets = prim_select(facts, _sel)
+            for obj in targets:
+                for r in range(obj.height):
+                    for c in range(obj.width):
+                        if obj.mask[r, c]:
+                            result[obj.row + r, obj.col + c] = new_color
+            return result
+        return _exec
+
+    fn = _make_fn(sel, source_preds)
+    if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+        sel_desc = _describe_selector(sel)
+        src_desc = _describe_selector(source_preds)
+        return _make_program(fn, f"synth: transition recolor [{sel_desc}] to color_of [{src_desc}]")
+    return None
+
+
+def _try_uniform_move_recolor(all_transitions, contexts):
+    """All changed objects moved + recolored — combine offset + color derivation."""
+    # Check constant offset
+    offsets = set()
+    for demo_transitions in all_transitions:
+        changed = [t for t in demo_transitions if t.match_type == 'moved_recolored']
+        if not changed:
+            return None
+        demo_offsets = set((t.dr, t.dc) for t in changed)
+        if len(demo_offsets) != 1:
+            return None
+        offsets.add(next(iter(demo_offsets)))
+
+    if len(offsets) != 1:
+        return None
+    dr, dc = next(iter(offsets))
+
+    # Check derived color (same logic as uniform recolor)
+    colors = set()
+    for demo_transitions in all_transitions:
+        changed = [t for t in demo_transitions if t.match_type == 'moved_recolored']
+        for t in changed:
+            colors.add(t.color_to)
+
+    if len(colors) == 1:
+        new_color = next(iter(colors))
+        # Constant color + constant offset
+        ctx0 = contexts[0]
+        moved_oids = set(t.in_obj.oid for t in all_transitions[0] if t.match_type == 'moved_recolored')
+        sel = _find_transition_selector(moved_oids, ctx0['facts'])
+        if sel is None:
+            return None
+
+        def _make_fn(_sel, _dr, _dc, _color):
+            def _exec(inp):
+                facts = perceive(inp)
+                bg = facts.bg
+                result = inp.copy()
+                targets = prim_select(facts, _sel)
+                for obj in targets:
+                    for r in range(obj.height):
+                        for c in range(obj.width):
+                            if obj.mask[r, c]:
+                                result[obj.row + r, obj.col + c] = bg
+                for obj in targets:
+                    for r in range(obj.height):
+                        for c in range(obj.width):
+                            if obj.mask[r, c]:
+                                nr, nc = obj.row + r + _dr, obj.col + c + _dc
+                                if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                    result[nr, nc] = _color
+                return result
+            return _exec
+
+        fn = _make_fn(sel, dr, dc, new_color)
+        if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+            desc = _describe_selector(sel)
+            return _make_program(fn, f"synth: transition move+recolor [{desc}] by ({dr},{dc}) color={new_color}")
+
+    return None
+
+
+def _try_stamp_transitions(all_transitions, contexts):
+    """Handle new objects whose shape matches an input object — stamp at offset.
+
+    Pattern: an input object is duplicated at a new position (possibly recolored).
+    The stamp offset may be constant or derived from structure.
+    """
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    for demo_transitions in all_transitions:
+        new_objs = [t for t in demo_transitions if t.match_type == 'new']
+        if not new_objs:
+            return None
+
+    # For each new output object, find the input object with the same shape
+    # and compute the offset
+    stamp_patterns = []  # per-demo list of (source_obj, new_obj, dr, dc, color)
+    for demo_idx, demo_transitions in enumerate(all_transitions):
+        facts = contexts[demo_idx]['facts']
+        new_objs = [t for t in demo_transitions if t.match_type == 'new']
+        demo_stamps = []
+        for t in new_objs:
+            out = t.out_obj
+            # Find matching input object by shape
+            source = None
+            for in_obj in facts.objects:
+                if (in_obj.height == out.height and in_obj.width == out.width
+                        and np.array_equal(in_obj.mask, out.mask)):
+                    source = in_obj
+                    break
+            if source is None:
+                return None  # can't find source for this new object
+            dr = out.row - source.row
+            dc = out.col - source.col
+            demo_stamps.append((source, out, dr, dc, out.color))
+        stamp_patterns.append(demo_stamps)
+
+    if not stamp_patterns[0]:
+        return None
+
+    # Check: constant offset across all stamps within and across demos?
+    all_offsets = set()
+    for demo_stamps in stamp_patterns:
+        for _, _, dr, dc, _ in demo_stamps:
+            all_offsets.add((dr, dc))
+
+    if len(all_offsets) == 1:
+        dr, dc = next(iter(all_offsets))
+        # Constant stamp offset — find selector for source objects
+        source_oids = set(s.oid for s, _, _, _, _ in stamp_patterns[0])
+        sel = _find_transition_selector(source_oids, contexts[0]['facts'])
+        if sel is None:
+            return None
+
+        # Check color: same as source or constant?
+        stamp_colors = set(c for demo in stamp_patterns for _, _, _, _, c in demo)
+        source_colors = set(s.color for demo in stamp_patterns for s, _, _, _, _ in demo)
+        use_source_color = all(c == s.color for demo in stamp_patterns for s, _, _, _, c in demo)
+
+        def _make_stamp_fn(_sel, _dr, _dc, _use_src_color, _const_color):
+            def _exec(inp):
+                facts = perceive(inp)
+                result = inp.copy()
+                targets = prim_select(facts, _sel)
+                rows, cols = inp.shape
+                for obj in targets:
+                    color = obj.color if _use_src_color else _const_color
+                    for r in range(obj.height):
+                        for c in range(obj.width):
+                            if obj.mask[r, c]:
+                                nr, nc = obj.row + r + _dr, obj.col + c + _dc
+                                if 0 <= nr < rows and 0 <= nc < cols:
+                                    result[nr, nc] = color
+                return result
+            return _exec
+
+        const_color = next(iter(stamp_colors)) if len(stamp_colors) == 1 else None
+        fn = _make_stamp_fn(sel, dr, dc, use_source_color, const_color)
+        if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+            desc = _describe_selector(sel)
+            color_desc = 'same_color' if use_source_color else f'color={const_color}'
+            return _make_program(fn, f"synth: transition stamp [{desc}] at ({dr},{dc}) {color_desc}")
+
+    return None
+
+
+def _try_transition_dispatch(all_transitions, contexts):
+    """Different object groups undergo different transitions.
+
+    Groups by match_type, finds selectors for each group, builds a
+    multi-branch dispatch program.
+    """
+    from aria.guided.clause import Predicate, Pred
+
+    ctx0 = contexts[0]
+    facts0 = ctx0['facts']
+    bg = facts0.bg
+
+    # Group transitions by match_type in demo 0
+    groups = {}
+    for t in all_transitions[0]:
+        if t.match_type == 'identical':
+            continue
+        if t.match_type not in groups:
+            groups[t.match_type] = []
+        groups[t.match_type].append(t)
+
+    if len(groups) < 2:
+        return None  # uniform or nothing — handled by strategy 1
+
+    # Find selectors for each group
+    group_selectors = {}
+    for mtype, transitions in groups.items():
+        oids = set(t.in_obj.oid for t in transitions if t.in_obj)
+        if not oids:
+            continue
+        sel = _find_transition_selector(oids, facts0)
+        if sel is None:
+            return None  # can't select this group
+        group_selectors[mtype] = sel
+
+    if len(group_selectors) < 2:
+        return None
+
+    # Check cross-demo consistency of transition parameters per group
+    branches = []  # (selector, match_type, params)
+    for mtype, sel in group_selectors.items():
+        transitions = groups[mtype]
+
+        if mtype == 'removed':
+            branches.append((sel, 'remove', {}))
+
+        elif mtype == 'recolored':
+            # Check: constant color or derived?
+            color_set = set(t.color_to for t in transitions)
+            if len(color_set) == 1:
+                branches.append((sel, 'recolor', {'color': next(iter(color_set))}))
+            else:
+                return None  # per-object varying recolor — too complex for now
+
+        elif mtype in ('moved', 'moved_recolored'):
+            offsets = set((t.dr, t.dc) for t in transitions)
+            colors = set(t.color_to for t in transitions) if mtype == 'moved_recolored' else set()
+            if len(offsets) == 1:
+                dr, dc = next(iter(offsets))
+                if mtype == 'moved':
+                    branches.append((sel, 'move', {'dr': dr, 'dc': dc}))
+                elif len(colors) == 1:
+                    branches.append((sel, 'move_recolor', {'dr': dr, 'dc': dc, 'color': next(iter(colors))}))
+                else:
+                    return None
+            else:
+                # Varying offset — check gravity (all to same border)
+                rows, cols = contexts[0]['input'].shape
+                grav_dir = _detect_gravity_direction(transitions, rows, cols)
+                if grav_dir:
+                    if mtype == 'moved_recolored' and len(colors) != 1:
+                        return None
+                    params = {'direction': grav_dir}
+                    if mtype == 'moved_recolored' and len(colors) == 1:
+                        params['color'] = next(iter(colors))
+                    branches.append((sel, 'gravity', params))
+                else:
+                    # Check slide (all same direction, varying distance)
+                    slide_dir = _detect_slide_direction(transitions)
+                    if slide_dir:
+                        if mtype == 'moved_recolored' and len(colors) != 1:
+                            return None
+                        params = {'direction': slide_dir}
+                        if mtype == 'moved_recolored' and len(colors) == 1:
+                            params['color'] = next(iter(colors))
+                        branches.append((sel, 'slide', params))
+                    else:
+                        return None
+
+        elif mtype == 'transformed':
+            xforms = set(t.transform for t in transitions)
+            if len(xforms) == 1:
+                branches.append((sel, 'transform', {'xform': next(iter(xforms))}))
+            else:
+                return None
+
+    # Build multi-branch program
+    def _make_dispatch_fn(branch_list):
+        def _exec(inp):
+            facts = perceive(inp)
+            _bg = facts.bg
+            result = inp.copy()
+            for sel, action, params in branch_list:
+                targets = prim_select(facts, sel)
+                for obj in targets:
+                    h, w = obj.height, obj.width
+                    if action == 'remove':
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    result[obj.row + r, obj.col + c] = _bg
+                    elif action == 'recolor':
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    result[obj.row + r, obj.col + c] = params['color']
+                    elif action in ('move', 'move_recolor'):
+                        dr, dc = params['dr'], params['dc']
+                        color = params.get('color', obj.color)
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    result[obj.row + r, obj.col + c] = _bg
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    nr, nc = obj.row + r + dr, obj.col + c + dc
+                                    if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                        result[nr, nc] = color
+                    elif action == 'gravity':
+                        d = params['direction']
+                        color = params.get('color', obj.color)
+                        _rows, _cols = result.shape
+                        if d == 'down': new_r, new_c = _rows - h, obj.col
+                        elif d == 'up': new_r, new_c = 0, obj.col
+                        elif d == 'right': new_r, new_c = obj.row, _cols - w
+                        elif d == 'left': new_r, new_c = obj.row, 0
+                        else: continue
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    result[obj.row + r, obj.col + c] = _bg
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    nr, nc = new_r + r, new_c + c
+                                    if 0 <= nr < _rows and 0 <= nc < _cols:
+                                        result[nr, nc] = color
+                    elif action == 'slide':
+                        d = params['direction']
+                        color = params.get('color', obj.color)
+                        _dr = {'down': 1, 'up': -1, 'right': 0, 'left': 0}[d]
+                        _dc = {'down': 0, 'up': 0, 'right': 1, 'left': -1}[d]
+                        shift = _compute_slide_shift(obj, _dr, _dc, inp, _bg,
+                                                      result.shape[0], result.shape[1])
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    result[obj.row + r, obj.col + c] = _bg
+                        for r in range(h):
+                            for c in range(w):
+                                if obj.mask[r, c]:
+                                    nr = obj.row + r + shift * _dr
+                                    nc = obj.col + c + shift * _dc
+                                    if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                        result[nr, nc] = color
+                    elif action == 'transform':
+                        xfn_map = {
+                            'flip_h': lambda m: m[:, ::-1],
+                            'flip_v': lambda m: m[::-1, :],
+                            'flip_hv': lambda m: m[::-1, ::-1],
+                            'rot90': lambda m: np.rot90(m),
+                            'rot180': lambda m: np.rot90(m, 2),
+                            'rot270': lambda m: np.rot90(m, 3),
+                        }
+                        xfn = xfn_map.get(params['xform'])
+                        if xfn:
+                            for r in range(h):
+                                for c in range(w):
+                                    if obj.mask[r, c]:
+                                        result[obj.row + r, obj.col + c] = _bg
+                            new_mask = xfn(obj.mask)
+                            mh, mw = new_mask.shape
+                            for r in range(mh):
+                                for c in range(mw):
+                                    if new_mask[r, c]:
+                                        nr, nc = obj.row + r, obj.col + c
+                                        if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                            result[nr, nc] = obj.color
+            return result
+        return _exec
+
+    fn = _make_dispatch_fn(branches)
+    if all(np.array_equal(fn(ctx['input']), ctx['output']) for ctx in contexts):
+        parts = []
+        for sel, action, params in branches:
+            desc = _describe_selector(sel)
+            if action == 'remove':
+                parts.append(f"[{desc}] remove")
+            elif action == 'recolor':
+                parts.append(f"[{desc}] recolor({params['color']})")
+            elif action == 'move':
+                parts.append(f"[{desc}] move({params['dr']},{params['dc']})")
+            elif action == 'move_recolor':
+                parts.append(f"[{desc}] move({params['dr']},{params['dc']}) recolor({params['color']})")
+            elif action == 'gravity':
+                rc = f" recolor({params['color']})" if 'color' in params else ''
+                parts.append(f"[{desc}] gravity({params['direction']}){rc}")
+            elif action == 'slide':
+                rc = f" recolor({params['color']})" if 'color' in params else ''
+                parts.append(f"[{desc}] slide({params['direction']}){rc}")
+            elif action == 'transform':
+                parts.append(f"[{desc}] transform({params['xform']})")
+        desc = '; '.join(parts)
+        return _make_program(fn, f"synth: transition dispatch {desc}")
+
+    return None
+
+
+def _detect_gravity_direction(transitions, rows, cols):
+    """Check if all transitions go to the same border. Returns direction or None."""
+    for d in ['down', 'up', 'right', 'left']:
+        all_match = True
+        any_moved = False
+        for t in transitions:
+            o = t.out_obj
+            at_border = ((d == 'down' and o.row + o.height == rows) or
+                         (d == 'up' and o.row == 0) or
+                         (d == 'right' and o.col + o.width == cols) or
+                         (d == 'left' and o.col == 0))
+            moved_toward = ((d == 'down' and t.dr > 0) or
+                            (d == 'up' and t.dr < 0) or
+                            (d == 'right' and t.dc > 0) or
+                            (d == 'left' and t.dc < 0))
+            if not at_border:
+                all_match = False
+                break
+            if moved_toward:
+                any_moved = True
+        if all_match and any_moved:
+            return d
+    return None
+
+
+def _detect_slide_direction(transitions):
+    """Check if all transitions move in the same direction (possibly different distances)."""
+    if not transitions:
+        return None
+    dirs = set()
+    for t in transitions:
+        if t.dr > 0 and t.dc == 0:
+            dirs.add('down')
+        elif t.dr < 0 and t.dc == 0:
+            dirs.add('up')
+        elif t.dc > 0 and t.dr == 0:
+            dirs.add('right')
+        elif t.dc < 0 and t.dr == 0:
+            dirs.add('left')
+        else:
+            return None  # diagonal or no movement
+    if len(dirs) == 1:
+        return next(iter(dirs))
+    return None
+
+
+def _find_transition_selector(oids, facts):
+    """Find a selector predicate list that selects exactly these objects."""
+    from aria.guided.clause import Predicate, Pred
+    from aria.guided.dsl import prim_select
+
+    target_set = set(oids)
+
+    # Color-based
+    target_objs = [o for o in facts.objects if o.oid in target_set]
+    if target_objs:
+        colors = set(o.color for o in target_objs)
+        for c in colors:
+            sel = [Predicate(Pred.COLOR_EQ, c)]
+            if set(o.oid for o in prim_select(facts, sel)) == target_set:
+                return sel
+
+    # Structural predicates
+    for pred in [Pred.IS_LARGEST, Pred.IS_SMALLEST, Pred.UNIQUE_COLOR,
+                 Pred.IS_SINGLETON, Pred.IS_RECTANGULAR, Pred.IS_LINE,
+                 Pred.IS_SQUARE, Pred.TOUCHES_BORDER, Pred.NOT_TOUCHES_BORDER,
+                 Pred.IS_TOPMOST, Pred.IS_BOTTOMMOST, Pred.IS_LEFTMOST, Pred.IS_RIGHTMOST]:
+        sel = [Predicate(pred)]
+        if set(o.oid for o in prim_select(facts, sel)) == target_set:
+            return sel
+
+    # NOT predicates
+    for pred in [Pred.IS_SINGLETON, Pred.IS_RECTANGULAR, Pred.IS_LINE,
+                 Pred.TOUCHES_BORDER]:
+        sel = [Predicate(Pred.NOT, Predicate(pred))]
+        if set(o.oid for o in prim_select(facts, sel)) == target_set:
+            return sel
+
+    # Relational
+    inner_preds = [
+        Predicate(Pred.IS_LARGEST), Predicate(Pred.IS_SMALLEST),
+        Predicate(Pred.UNIQUE_COLOR),
+    ]
+    for o in facts.objects:
+        inner_preds.append(Predicate(Pred.COLOR_EQ, o.color))
+    for rel in [Pred.CONTAINED_BY, Pred.CONTAINS, Pred.ADJACENT_TO, Pred.SAME_SHAPE_AS]:
+        for inner in inner_preds:
+            sel = [Predicate(rel, inner)]
+            if set(o.oid for o in prim_select(facts, sel)) == target_set:
+                return sel
+
+    return None
 
 
 def _search_conditional_dispatch(all_values, contexts):
@@ -884,6 +1953,11 @@ def _search_conditional_dispatch(all_values, contexts):
     for obj in facts0.objects:
         action = _classify_object_action(obj, inp0, out0, bg)
         obj_actions[obj.oid] = action
+
+    # Lift constant recolors to derived-color recolors when possible
+    # If recolored objects get their new color from a related object,
+    # replace ('recolor', constant) with ('recolor_derived', relation_type)
+    obj_actions = _lift_derived_colors(obj_actions, facts0, contexts)
 
     # Group objects by action
     action_groups = {}
@@ -917,78 +1991,228 @@ def _search_conditional_dispatch(all_values, contexts):
         # Structural predicates
         for pred in [Pred.IS_LARGEST, Pred.IS_SMALLEST, Pred.UNIQUE_COLOR,
                      Pred.IS_SINGLETON, Pred.IS_RECTANGULAR, Pred.IS_LINE,
-                     Pred.TOUCHES_BORDER, Pred.NOT_TOUCHES_BORDER]:
+                     Pred.IS_SQUARE, Pred.TOUCHES_BORDER, Pred.NOT_TOUCHES_BORDER,
+                 Pred.IS_TOPMOST, Pred.IS_BOTTOMMOST, Pred.IS_LEFTMOST, Pred.IS_RIGHTMOST]:
             sel = [Predicate(pred)]
             selected = set(o.oid for o in prim_select(facts, sel))
             if selected == target_set:
                 candidates.append(sel)
 
+        # NOT(predicate) — complement selectors
+        for pred in [Pred.IS_SINGLETON, Pred.IS_RECTANGULAR, Pred.IS_LINE,
+                     Pred.IS_SQUARE, Pred.TOUCHES_BORDER]:
+            sel = [Predicate(Pred.NOT, Predicate(pred))]
+            selected = set(o.oid for o in prim_select(facts, sel))
+            if selected == target_set:
+                candidates.append(sel)
+
+        # Two-predicate compounds for tighter selection
+        for p1 in [Pred.IS_RECTANGULAR, Pred.IS_LINE, Pred.IS_SINGLETON,
+                    Pred.TOUCHES_BORDER]:
+            for p2 in [Pred.IS_RECTANGULAR, Pred.IS_LINE, Pred.IS_SINGLETON,
+                        Pred.TOUCHES_BORDER]:
+                if p1.value >= p2.value:
+                    continue
+                sel = [Predicate(p1), Predicate(p2)]
+                selected = set(o.oid for o in prim_select(facts, sel))
+                if selected == target_set:
+                    candidates.append(sel)
+
+        # --- Relational selectors ---
+        # CONTAINED_BY(other_pred): objects contained by objects matching other_pred
+        # CONTAINS(other_pred): objects that contain objects matching other_pred
+        # ADJACENT_TO(other_pred): objects adjacent to objects matching other_pred
+        # SAME_SHAPE_AS(other_pred): objects with same shape as objects matching other_pred
+        #
+        # For each relational predicate, try inner selectors that identify
+        # the "other" object structurally (not by color literal when avoidable)
+        inner_preds = [
+            Predicate(Pred.IS_LARGEST),
+            Predicate(Pred.IS_SMALLEST),
+            Predicate(Pred.UNIQUE_COLOR),
+            Predicate(Pred.IS_SINGLETON),
+            Predicate(Pred.IS_RECTANGULAR),
+            Predicate(Pred.NOT, Predicate(Pred.IS_SINGLETON)),
+            Predicate(Pred.TOUCHES_BORDER),
+            Predicate(Pred.NOT, Predicate(Pred.TOUCHES_BORDER)),
+        ]
+        # Also try color-based inner selectors
+        seen_colors = set()
+        for o in all_objs:
+            if o.color not in seen_colors:
+                inner_preds.append(Predicate(Pred.COLOR_EQ, o.color))
+                seen_colors.add(o.color)
+
+        for rel_pred in [Pred.CONTAINED_BY, Pred.CONTAINS,
+                         Pred.ADJACENT_TO, Pred.SAME_SHAPE_AS]:
+            for inner in inner_preds:
+                sel = [Predicate(rel_pred, inner)]
+                selected = set(o.oid for o in prim_select(facts, sel))
+                if selected == target_set:
+                    candidates.append(sel)
+
         return candidates
 
-    # For each pair of action groups, try to find selectors
-    group_keys = sorted(action_groups.keys(),
-                        key=lambda k: len(action_groups[k]), reverse=True)
+    # Separate keep (default) from active action groups
+    keep_key = ('keep', None)
+    active_groups = {k: v for k, v in action_groups.items() if k != keep_key}
 
-    for i, key_a in enumerate(group_keys):
-        for key_b in group_keys[i+1:]:
-            oids_a = action_groups[key_a]
-            oids_b = action_groups[key_b]
-            sels_a = _find_selector(oids_a, facts0.objects, facts0)
-            sels_b = _find_selector(oids_b, facts0.objects, facts0)
-            if not sels_a or not sels_b:
+    if not active_groups:
+        return None
+
+    # Find selectors for each active group
+    group_selectors = {}  # key → list of selector candidates
+    for key, oids in active_groups.items():
+        sels = _find_selector(oids, facts0.objects, facts0)
+        if not sels:
+            break  # can't select this group → no dispatch possible
+        group_selectors[key] = sels
+    else:
+        # All active groups have selectors — try to build dispatch
+        # Support 1-3 active groups
+        active_keys = list(active_groups.keys())
+        if len(active_keys) > 3:
+            return None  # too many groups
+
+        # Try selector combinations
+        from itertools import product
+        sel_lists = [group_selectors[k][:3] for k in active_keys]
+        for combo in product(*sel_lists):
+            # Check disjointness
+            all_selected = []
+            disjoint = True
+            for sel in combo:
+                selected = set(o.oid for o in prim_select(facts0, sel))
+                for prev in all_selected:
+                    if selected & prev:
+                        disjoint = False
+                        break
+                if not disjoint:
+                    break
+                all_selected.append(selected)
+            if not disjoint:
                 continue
 
-            # Try each combination of selectors
-            for sel_a in sels_a[:3]:
-                for sel_b in sels_b[:3]:
-                    # Verify disjointness
-                    selected_a = set(o.oid for o in prim_select(facts0, sel_a))
-                    selected_b = set(o.oid for o in prim_select(facts0, sel_b))
-                    if selected_a & selected_b:
-                        continue
+            # Build dispatch: list of (selector, action, param)
+            branches = list(zip(combo, active_keys))
 
-                    # Build the conditional program
-                    action_a, param_a = key_a
-                    action_b, param_b = key_b
+            def _make_dispatch_fn(branch_list):
+                def _exec(inp):
+                    facts = perceive(inp)
+                    _bg = facts.bg
+                    result = inp.copy()
+                    # Build match sets
+                    match_sets = []
+                    for sel, (act, prm) in branch_list:
+                        matched = set(o.oid for o in prim_select(facts, sel))
+                        match_sets.append((matched, act, prm))
+                    for obj in facts.objects:
+                        for matched, act, prm in match_sets:
+                            if obj.oid in matched:
+                                _apply_action_inplace(result, obj, act, prm, _bg, inp)
+                                break
+                    return result
+                return _exec
 
-                    def _make_cond_fn(sa, sb, act_a, prm_a, act_b, prm_b):
-                        def _exec(inp):
-                            facts = perceive(inp)
-                            _bg = facts.bg
+            fn = _make_dispatch_fn(branches)
 
-                            canvas = np.full_like(inp, _bg)
-                            matched_a = set(o.oid for o in prim_select(facts, sa))
-                            matched_b = set(o.oid for o in prim_select(facts, sb))
+            # Verify on ALL demos
+            all_ok = all(
+                np.array_equal(fn(ctx['input']), ctx['output'])
+                for ctx in contexts
+            )
+            if all_ok:
+                parts = []
+                for sel, (act, prm) in branches:
+                    parts.append(f"if [{_describe_selector(sel)}] then {_describe_action(act, prm)}")
+                desc = '; '.join(parts)
+                return _make_program(fn, f"synth: dispatch {desc}")
 
-                            for obj in facts.objects:
-                                if obj.oid in matched_a:
-                                    _apply_action(canvas, obj, act_a, prm_a, _bg, inp)
-                                elif obj.oid in matched_b:
-                                    _apply_action(canvas, obj, act_b, prm_b, _bg, inp)
-                                else:
-                                    _apply_action(canvas, obj, 'keep', None, _bg, inp)
-                            return canvas
-                        return _exec
+    return None
 
-                    fn = _make_cond_fn(sel_a, sel_b, action_a, param_a,
-                                        action_b, param_b)
 
-                    # Verify on ALL demos
-                    all_ok = True
-                    for ctx in contexts:
-                        pred = fn(ctx['input'])
-                        if not np.array_equal(pred, ctx['output']):
-                            all_ok = False
-                            break
+def _lift_derived_colors(obj_actions, facts0, contexts):
+    """Lift constant recolors to derived-color recolors when the new color
+    comes from a related object and this relationship is consistent across demos.
 
-                    if all_ok:
-                        desc_a = _describe_selector(sel_a)
-                        desc_b = _describe_selector(sel_b)
-                        act_desc_a = _describe_action(action_a, param_a)
-                        act_desc_b = _describe_action(action_b, param_b)
-                        desc = f"if [{desc_a}] then {act_desc_a}; if [{desc_b}] then {act_desc_b}"
-                        return _make_program(fn, f"synth: dispatch {desc}")
+    Returns updated obj_actions dict.
+    """
+    recolored_oids = [oid for oid, (act, _) in obj_actions.items() if act == 'recolor']
+    if not recolored_oids:
+        return obj_actions
 
+    # For each recolored object in demo 0, check what relation provides the new color
+    relation_types = ['adjacent', 'contained_by', 'contains']
+
+    for oid in recolored_oids:
+        _, new_color = obj_actions[oid]
+        obj = next(o for o in facts0.objects if o.oid == oid)
+
+        # Find which relation gives us the color
+        for rel_type in relation_types:
+            source = _find_color_source(obj, new_color, facts0, rel_type)
+            if source is None:
+                continue
+
+            # Verify across ALL demos: does the same relation consistently
+            # provide the recolor target?
+            consistent = True
+            for ctx in contexts[1:]:
+                demo_facts = ctx['facts']
+                demo_bg = demo_facts.bg
+                # Find the corresponding object in this demo
+                # (match by color since oid won't correspond across demos)
+                demo_obj = _find_corresponding_obj(obj, demo_facts)
+                if demo_obj is None:
+                    consistent = False
+                    break
+                act, param = _classify_object_action(demo_obj, ctx['input'], ctx['output'], demo_bg)
+                if act != 'recolor':
+                    consistent = False
+                    break
+                # Check: does the same relation provide this color?
+                demo_source = _find_color_source(demo_obj, param, demo_facts, rel_type)
+                if demo_source is None:
+                    consistent = False
+                    break
+
+            if consistent:
+                obj_actions[oid] = ('recolor_derived', rel_type)
+                break
+
+    return obj_actions
+
+
+def _find_color_source(obj, target_color, facts, rel_type):
+    """Find an object related to obj whose color == target_color."""
+    for pair in facts.pairs:
+        if pair.oid_a == obj.oid:
+            other_oid = pair.oid_b
+        elif pair.oid_b == obj.oid:
+            other_oid = pair.oid_a
+        else:
+            continue
+        other = next((o for o in facts.objects if o.oid == other_oid), None)
+        if other is None or other.color != target_color:
+            continue
+        if rel_type == 'adjacent' and pair.adjacent:
+            return other
+        if rel_type == 'contained_by':
+            if (pair.oid_a == obj.oid and pair.b_contains_a) or \
+               (pair.oid_b == obj.oid and pair.a_contains_b):
+                return other
+        if rel_type == 'contains':
+            if (pair.oid_a == obj.oid and pair.a_contains_b) or \
+               (pair.oid_b == obj.oid and pair.b_contains_a):
+                return other
+    return None
+
+
+def _find_corresponding_obj(ref_obj, demo_facts):
+    """Find an object in demo_facts that corresponds to ref_obj by color+shape."""
+    for o in demo_facts.objects:
+        if o.color == ref_obj.color:
+            return o
     return None
 
 
@@ -1152,6 +2376,24 @@ def _apply_action(canvas, obj, action, param, bg, inp=None):
                     if 0 <= nr < rows and 0 <= nc < cols:
                         canvas[nr, nc] = obj.color
 
+    elif action == 'recolor_derived':
+        # Recolor to color of a related object (derived at execution time)
+        rel_type = param  # 'adjacent', 'contained_by', 'contains'
+        derived_color = _derive_color_from_relation(obj, canvas, bg, rel_type, inp)
+        if derived_color is not None:
+            for r in range(h):
+                for c in range(w):
+                    if obj.mask[r, c]:
+                        nr, nc = obj.row + r, obj.col + c
+                        if 0 <= nr < rows and 0 <= nc < cols:
+                            canvas[nr, nc] = derived_color
+        else:
+            # Fallback: keep as-is
+            for r in range(h):
+                for c in range(w):
+                    if obj.mask[r, c]:
+                        canvas[nr, nc] = obj.color
+
     elif action == 'fill_interior':
         # Keep the object, fill bg holes with param color
         for r in range(h):
@@ -1161,7 +2403,6 @@ def _apply_action(canvas, obj, action, param, bg, inp=None):
                     if obj.mask[r, c]:
                         canvas[nr, nc] = obj.color
                     elif inp is not None and inp[nr, nc] == bg:
-                        # Check if this bg cell is "inside" the object bbox
                         canvas[nr, nc] = param
 
 
@@ -1176,11 +2417,139 @@ def _describe_selector(sel):
     return ' & '.join(parts)
 
 
+def _apply_action_inplace(result, obj, action, param, bg, inp):
+    """Apply an action by mutating the grid in-place (not rebuilding from scratch)."""
+    h, w = obj.height, obj.width
+    rows, cols = result.shape
+
+    if action == 'recolor':
+        for r in range(h):
+            for c in range(w):
+                if obj.mask[r, c]:
+                    result[obj.row + r, obj.col + c] = param
+
+    elif action == 'recolor_derived':
+        derived_color = _derive_color_from_relation(obj, result, bg, param, inp)
+        if derived_color is not None:
+            for r in range(h):
+                for c in range(w):
+                    if obj.mask[r, c]:
+                        result[obj.row + r, obj.col + c] = derived_color
+
+    elif action == 'remove':
+        for r in range(h):
+            for c in range(w):
+                if obj.mask[r, c]:
+                    result[obj.row + r, obj.col + c] = bg
+
+    elif action == 'transform':
+        xform = param
+        mask = obj.mask
+        if xform == 'flip_h':
+            mask = mask[::-1, :]
+        elif xform == 'flip_v':
+            mask = mask[:, ::-1]
+        elif xform == 'flip_hv':
+            mask = mask[::-1, ::-1]
+        elif xform == 'rot90':
+            mask = np.rot90(mask)
+        elif xform == 'rot180':
+            mask = np.rot90(mask, 2)
+        # Clear original position first
+        for r in range(h):
+            for c in range(w):
+                if obj.mask[r, c]:
+                    result[obj.row + r, obj.col + c] = bg
+        # Place transformed
+        mh, mw = mask.shape
+        for r in range(mh):
+            for c in range(mw):
+                if mask[r, c]:
+                    nr, nc = obj.row + r, obj.col + c
+                    if 0 <= nr < rows and 0 <= nc < cols:
+                        result[nr, nc] = obj.color
+
+    elif action == 'gravity':
+        direction = param
+        if direction == 'down':
+            new_row, new_col = rows - h, obj.col
+        elif direction == 'up':
+            new_row, new_col = 0, obj.col
+        elif direction == 'right':
+            new_row, new_col = obj.row, cols - w
+        elif direction == 'left':
+            new_row, new_col = obj.row, 0
+        else:
+            return
+        # Clear original
+        for r in range(h):
+            for c in range(w):
+                if obj.mask[r, c]:
+                    result[obj.row + r, obj.col + c] = bg
+        # Place at new position
+        for r in range(h):
+            for c in range(w):
+                if obj.mask[r, c]:
+                    nr, nc = new_row + r, new_col + c
+                    if 0 <= nr < rows and 0 <= nc < cols:
+                        result[nr, nc] = obj.color
+
+    elif action == 'fill_interior':
+        for r in range(h):
+            for c in range(w):
+                nr, nc = obj.row + r, obj.col + c
+                if 0 <= nr < rows and 0 <= nc < cols:
+                    if not obj.mask[r, c] and inp is not None and inp[nr, nc] == bg:
+                        result[nr, nc] = param
+
+
+def _derive_color_from_relation(obj, grid, bg, rel_type, inp):
+    """At execution time, find the color of a related object.
+
+    Uses the input grid's perception to find the related object,
+    then returns its color.
+    """
+    if inp is None:
+        return None
+    facts = perceive(inp)
+    # Find our object in the perceived facts (match by position)
+    my_obj = None
+    for o in facts.objects:
+        if o.row == obj.row and o.col == obj.col and o.color == obj.color:
+            my_obj = o
+            break
+    if my_obj is None:
+        return None
+
+    for pair in facts.pairs:
+        if pair.oid_a == my_obj.oid:
+            other = next((o for o in facts.objects if o.oid == pair.oid_b), None)
+        elif pair.oid_b == my_obj.oid:
+            other = next((o for o in facts.objects if o.oid == pair.oid_a), None)
+        else:
+            continue
+        if other is None or other.color == my_obj.color:
+            continue
+        if rel_type == 'adjacent' and pair.adjacent:
+            return other.color
+        if rel_type == 'contained_by':
+            if (pair.oid_a == my_obj.oid and pair.b_contains_a) or \
+               (pair.oid_b == my_obj.oid and pair.a_contains_b):
+                return other.color
+        if rel_type == 'contains':
+            if (pair.oid_a == my_obj.oid and pair.a_contains_b) or \
+               (pair.oid_b == my_obj.oid and pair.b_contains_a):
+                return other.color
+    return None
+
+
 def _describe_action(action, param):
     if action == 'keep':
         return 'keep'
     elif action == 'recolor':
         return f'recolor({param})'
+    elif action == 'recolor_derived':
+        return f'recolor(color_of_{param})'
     elif action == 'remove':
         return 'remove'
     elif action == 'transform':
@@ -2058,7 +3427,7 @@ def _build_executor(key, vals, contexts):
     def _exec(inp):
         facts = perceive(inp)
         # Rebuild seeds
-        seeds = {'input': inp}
+        seeds = {'input': inp, 'facts': facts}
         from aria.guided.clause import Predicate, Pred
         predicates = {
             'largest': [Predicate(Pred.IS_LARGEST)],
@@ -2071,6 +3440,21 @@ def _build_executor(key, vals, contexts):
                 seeds[f'sel_{name}'] = selected[0]
         for i, obj in enumerate(facts.objects):
             seeds[f'obj_{i}'] = obj
+        # Selector constants (only add if key not already used by an ObjFact seed)
+        selector_seeds = {
+            'sel_largest': [Predicate(Pred.IS_LARGEST)],
+            'sel_smallest': [Predicate(Pred.IS_SMALLEST)],
+            'sel_unique_color': [Predicate(Pred.UNIQUE_COLOR)],
+            'sel_topmost': [Predicate(Pred.IS_TOPMOST)],
+            'sel_bottommost': [Predicate(Pred.IS_BOTTOMMOST)],
+            'sel_leftmost': [Predicate(Pred.IS_LEFTMOST)],
+            'sel_rightmost': [Predicate(Pred.IS_RIGHTMOST)],
+        }
+        for obj in facts.objects:
+            selector_seeds[f'sel_color_{obj.color}'] = [Predicate(Pred.COLOR_EQ, obj.color)]
+        for k, v in selector_seeds.items():
+            if k not in seeds:
+                seeds[k] = v
 
         # Evaluate the key expression
         return _eval_key(key, seeds, inp, facts)
@@ -2139,8 +3523,8 @@ def _eval_key(key, seeds, inp, facts):
     elif op_name.startswith('grid_'):
         xform = op_name[len('grid_'):]
         g = arg_vals[0]
-        if xform == 'flip_h': return g[::-1, :]
-        elif xform == 'flip_v': return g[:, ::-1]
+        if xform == 'flip_h': return g[:, ::-1]
+        elif xform == 'flip_v': return g[::-1, :]
         elif xform == 'flip_hv': return g[::-1, ::-1]
         elif xform == 'rot90': return np.rot90(g)
         elif xform == 'rot180': return np.rot90(g, 2)
@@ -2150,20 +3534,46 @@ def _eval_key(key, seeds, inp, facts):
         return _safe_mirror(arg_vals[0], mode)
     elif op_name == 'perceive':
         return perceive(arg_vals[0]).objects
+    elif op_name == 'get_facts':
+        return facts
+    elif op_name == 'select':
+        return _safe_select(arg_vals[0], arg_vals[1])
     elif op_name == 'get_color':
         return arg_vals[0].color
     elif op_name == 'get_mask':
         return arg_vals[0].mask
+    elif op_name == 'bind_contains':
+        return _bind_contains(arg_vals[0])
+    elif op_name == 'bind_adjacent':
+        return _bind_adjacent(arg_vals[0])
+    elif op_name == 'bind_same_shape':
+        return _bind_same_shape(arg_vals[0])
+    elif op_name == 'binding_host':
+        return arg_vals[0][0] if arg_vals[0] else None
+    elif op_name == 'binding_content':
+        return arg_vals[0][1] if arg_vals[0] else None
+    elif op_name == 'crop_host_bbox':
+        return prim_crop_bbox(arg_vals[0], arg_vals[1][0]) if arg_vals[1] else None
+    elif op_name == 'crop_content_bbox':
+        return prim_crop_bbox(arg_vals[0], arg_vals[1][1]) if arg_vals[1] else None
     elif op_name.startswith('transform_'):
         xform = op_name[len('transform_'):]
         r = arg_vals[0]
-        if xform == 'flip_h': return r[::-1, :]
-        elif xform == 'flip_v': return r[:, ::-1]
+        if xform == 'flip_h': return r[:, ::-1]
+        elif xform == 'flip_v': return r[::-1, :]
         elif xform == 'flip_hv': return r[::-1, ::-1]
         elif xform == 'rot90': return np.rot90(r)
         elif xform == 'rot180': return np.rot90(r, 2)
         elif xform == 'transpose': return r.T
         return r
+    elif op_name == 'transition_source':
+        return arg_vals[0].in_obj if arg_vals[0] else None
+    elif op_name == 'transition_target':
+        return arg_vals[0].out_obj if arg_vals[0] else None
+    elif op_name == 'transition_color_to':
+        return arg_vals[0].color_to if arg_vals[0] and arg_vals[0].color_to >= 0 else None
+    elif op_name == 'transition_color_from':
+        return arg_vals[0].color_from if arg_vals[0] and arg_vals[0].color_from >= 0 else None
     else:
         raise ValueError(f"Unknown op: {op_name}")
 

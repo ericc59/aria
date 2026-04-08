@@ -414,6 +414,37 @@ def _compute_dim_candidates(rows, cols, bg, objects, separators, regions, color_
                 d['most_common_color_obj_height'] = mc_largest.height
                 d['most_common_color_obj_width'] = mc_largest.width
 
+        # Frame interior dimensions: for framed objects, the interior bbox
+        if grid is not None:
+            from aria.guided.dsl import prim_find_frame
+            frame_interiors = []
+            for obj in objects:
+                if obj.size >= 8:
+                    frame = prim_find_frame(obj, grid)
+                    if frame:
+                        r0, c0, r1, c1 = frame
+                        ih, iw = r1 - r0 - 1, c1 - c0 - 1
+                        if ih > 0 and iw > 0:
+                            frame_interiors.append((ih, iw, obj))
+            if frame_interiors:
+                # Largest frame interior
+                frame_interiors.sort(key=lambda x: x[0] * x[1], reverse=True)
+                d['largest_frame_interior_height'] = frame_interiors[0][0]
+                d['largest_frame_interior_width'] = frame_interiors[0][1]
+                if len(frame_interiors) >= 2:
+                    d['second_frame_interior_height'] = frame_interiors[1][0]
+                    d['second_frame_interior_width'] = frame_interiors[1][1]
+
+        # Interior object bbox minus 1 (for objects with border)
+        if interior:
+            big_int = max(interior, key=lambda o: o.size)
+            d['interior_obj_height-2'] = max(0, big_int.height - 2)
+            d['interior_obj_width-2'] = max(0, big_int.width - 2)
+
+        # Largest non-bg rectangular region dimensions
+        d['largest_height-2'] = max(0, largest.height - 2)
+        d['largest_width-2'] = max(0, largest.width - 2)
+
     # Rank-based: dimensions of 2nd, 3rd largest objects
         by_size = sorted(objects, key=lambda o: -o.size)
         for rank in range(min(len(by_size), 5)):

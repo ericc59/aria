@@ -53,6 +53,10 @@ class Pred(Enum):
     # Position predicates
     TOUCHES_BORDER = auto()
     NOT_TOUCHES_BORDER = auto()
+    IS_TOPMOST = auto()        # smallest row (closest to top)
+    IS_BOTTOMMOST = auto()     # largest row+height (closest to bottom)
+    IS_LEFTMOST = auto()       # smallest col
+    IS_RIGHTMOST = auto()      # largest col+width
 
     # Relational predicates — param: (relation, other_predicate)
     # Tests whether ANY other object satisfying other_predicate has
@@ -98,6 +102,14 @@ class Predicate:
             return obj.touches_top or obj.touches_bottom or obj.touches_left or obj.touches_right
         if self.pred == Pred.NOT_TOUCHES_BORDER:
             return not (obj.touches_top or obj.touches_bottom or obj.touches_left or obj.touches_right)
+        if self.pred == Pred.IS_TOPMOST:
+            return obj.row == min(o.row for o in all_objs)
+        if self.pred == Pred.IS_BOTTOMMOST:
+            return (obj.row + obj.height) == max(o.row + o.height for o in all_objs)
+        if self.pred == Pred.IS_LEFTMOST:
+            return obj.col == min(o.col for o in all_objs)
+        if self.pred == Pred.IS_RIGHTMOST:
+            return (obj.col + obj.width) == max(o.col + o.width for o in all_objs)
 
         # NOT combinator
         if self.pred == Pred.NOT:

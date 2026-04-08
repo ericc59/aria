@@ -30,8 +30,9 @@ from aria.types import Grid
 
 def prim_select(facts: GridFacts, predicate) -> list[ObjFact]:
     """Select objects matching a predicate."""
+    pairs = facts.pairs if hasattr(facts, 'pairs') else None
     return [o for o in facts.objects
-            if all(p.test(o, facts.objects) for p in predicate)]
+            if all(p.test(o, facts.objects, pairs) for p in predicate)]
 
 
 def prim_crop_bbox(grid: Grid, obj: ObjFact) -> Grid:
@@ -557,16 +558,36 @@ class Program:
     steps: list = field(default_factory=list)
     description: str = ""
     _execute_fn: Any = field(default=None, repr=False)
+    ast: Any = None  # optional ASTNode for inspectable programs
 
     def execute(self, inp: Grid) -> Grid:
         if self._execute_fn:
             return self._execute_fn(inp)
+        if self.ast is not None:
+            from aria.guided.ast_program import execute_ast
+            result = execute_ast(self.ast, inp)
+            return result if result is not None else inp
         return inp
+
+    def size(self) -> int:
+        """Program complexity (MDL proxy)."""
+        if self.ast is not None:
+            return self.ast.size()
+        return len(self.description)
 
 
 def _make_program(fn, desc) -> Program:
-    """Create a program from an execute function."""
-    return Program(steps=[], description=desc, _execute_fn=fn)
+    """Create a program from an execute function.
+
+    Also attempts to build an AST representation for inspectability.
+    """
+    ast = None
+    try:
+        from aria.guided.ast_program import program_to_ast
+        ast = program_to_ast(desc)
+    except Exception:
+        pass
+    return Program(steps=[], description=desc, _execute_fn=fn, ast=ast)
 
 
 # ---------------------------------------------------------------------------

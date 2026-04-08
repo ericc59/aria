@@ -389,7 +389,8 @@ def _candidate_tier(name):
                 'min_obj_height', 'min_obj_width', 'max_color_count', 'min_color_count',
                 'total_nonbg_pixels', 'n_bg_pixels', 'sum_obj_heights', 'sum_obj_widths'):
         return 1
-    for prefix in ('largest_', 'smallest_', 'second_largest_', 'unique_color_obj_',
+    for prefix in ('largest_', 'smallest_', 'second_largest_', 'second_frame_',
+                    'unique_color_obj_',
                     'only_unique_color_', 'largest_unique_color_',
                     'interior_obj_', 'biggest_interior_', 'smallest_nonsing_',
                     'most_common_color_obj_', 'first_cell_', 'max_cell_', 'min_cell_'):

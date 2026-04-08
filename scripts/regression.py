@@ -16,6 +16,9 @@ KNOWN_SOLVES = [
     'a2fd1cf0', 'a416b8f3', 'a48eeaf7', 'bc4146bd', 'be94b721',
     'c48954c1', 'c909285e', 'c9e6f938', 'cd3c21df', 'd4a91cb9',
     'd9fac9be', 'dc1df850', 'f0df5ff0',
+    'a79310a0',  # transition: move+recolor
+    '3c9b0459', '6150a2bd', '67385a82', '67a3c6ac', '68b16354',
+    '74dd1130', '9dfd6313', 'aedd82e4', 'b1948b0a', 'd8c310e9',
 ]
 
 ds_train = get_dataset('v2-train')

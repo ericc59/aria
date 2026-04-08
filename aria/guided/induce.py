@@ -138,6 +138,13 @@ def _induce_under_correspondence(demo_facts, demo_mappings, demos, bg):
         if composed:
             return composed, True
 
+    # 2b. Bounded 3-clause: apply best 2-clause partial, induce 3rd on residual
+    if ranked_partials:
+        composed3 = _compose_three_clauses(ranked_partials, demos, bg,
+                                            demo_facts, demo_mappings)
+        if composed3:
+            return composed3, True
+
     # 3. Best partial
     if ranked_partials:
         return ClauseProgram(clauses=[ranked_partials[0][1]], output_bg=bg), False
@@ -150,7 +157,7 @@ def _induce_under_correspondence(demo_facts, demo_mappings, demos, bg):
 # 2-clause composition
 # ---------------------------------------------------------------------------
 
-_MAX_PARTIALS = 20  # max unique partial clauses to consider for pairing
+_MAX_PARTIALS = 50  # max unique partial clauses to consider for pairing
 
 def _compose_two_clauses(ranked_partials, demos, bg, demo_facts, demo_mappings):
     """Try to find a 2-clause program that exactly solves all demos.
@@ -251,6 +258,102 @@ def _compose_two_clauses(ranked_partials, demos, bg, demo_facts, demo_mappings):
         if composed:
             return composed
 
+    return None
+
+
+def _compose_three_clauses(ranked_partials, demos, bg, demo_facts, demo_mappings):
+    """Try 3-clause programs: find the best 2-clause partial, add a 3rd clause.
+
+    Only attempts a bounded number of 2-clause starting points.
+    """
+    from collections import defaultdict
+
+    # Get diverse partials
+    by_action = defaultdict(list)
+    seen = set()
+    for item in ranked_partials:
+        diff, clause, errors = item
+        if clause.description in seen:
+            continue
+        seen.add(clause.description)
+        by_action[clause.action].append(item)
+
+    deduped = []
+    idx = {a: 0 for a in by_action}
+    while len(deduped) < 15 and by_action:
+        for action in list(by_action.keys()):
+            items = by_action[action]
+            if idx[action] < len(items):
+                deduped.append(items[idx[action]])
+                idx[action] += 1
+            else:
+                del by_action[action]
+            if len(deduped) >= 15:
+                break
+
+    cached_facts = [inf for inf, _ in demo_facts]
+
+    # Try pairs as 2-clause starting points
+    tried = 0
+    for i in range(len(deduped)):
+        for j in range(i + 1, len(deduped)):
+            if tried >= 20:
+                return None
+            c1, c2 = deduped[i][1], deduped[j][1]
+            if c1.target_preds == c2.target_preds:
+                continue
+
+            # Try both orderings
+            for clauses_2 in [[c1, c2], [c2, c1]]:
+                prog2 = ClauseProgram(clauses=clauses_2, output_bg=bg)
+                # Check: does 2-clause get close? (fewer errors than single best)
+                total_err = 0
+                intermediates = []
+                for inp, out in demos:
+                    try:
+                        mid = prog2.execute(inp)
+                        total_err += int(np.sum(mid != out))
+                        intermediates.append(mid)
+                    except Exception:
+                        total_err = 999999
+                        break
+
+                if total_err == 0:
+                    continue  # already exact — should have been caught earlier
+                if total_err > 50:
+                    continue  # too many errors — not worth trying 3rd clause
+
+                tried += 1
+
+                # Induce 3rd clause on residual
+                residual_demos = list(zip(intermediates, [out for _, out in demos]))
+                third = _residual_compose_single(residual_demos, bg)
+                if third:
+                    prog3 = ClauseProgram(clauses=clauses_2 + [third], output_bg=bg)
+                    if _verify_program_cached(prog3, demos, cached_facts):
+                        return prog3
+
+    return None
+
+
+def _residual_compose_single(residual_demos, bg):
+    """Induce a single clause on residual demos (intermediate → expected output)."""
+    from aria.guided.correspond import map_output_to_input
+
+    demo_facts = []
+    demo_mappings = []
+    for mid, out in residual_demos:
+        in_f = perceive(mid)
+        out_f = perceive(out)
+        demo_facts.append((in_f, out_f))
+        demo_mappings.append(map_output_to_input(out_f, in_f))
+
+    candidates = _generate_candidates(demo_facts, demo_mappings, residual_demos)
+    candidates = _cap_candidates(candidates, 100)
+    exact, _ = _score_candidates(candidates, residual_demos, bg, demo_facts=demo_facts)
+    if exact:
+        exact.sort(key=_clause_quality, reverse=True)
+        return exact[0]
     return None
 
 
@@ -586,7 +689,7 @@ def _generate_candidates(demo_facts, demo_mappings, demos):
     in_facts, out_facts = demo_facts[0]
     mappings = demo_mappings[0]
 
-    # Handle output objects (recolored, moved, etc.)
+    # Handle output objects (recolored, moved, transformed, etc.)
     for m in mappings:
         if m.match_type == "identical":
             continue
@@ -597,6 +700,10 @@ def _generate_candidates(demo_facts, demo_mappings, demos):
 
         elif m.match_type in ("moved", "moved_recolored"):
             clauses = _candidates_for_move(m, in_facts)
+            candidates.extend(clauses)
+
+        elif m.match_type == "transformed" and m.transform:
+            clauses = _candidates_for_transform(m, in_facts)
             candidates.extend(clauses)
 
     # Learned mappings: for recolor with novel output colors that vary
@@ -708,6 +815,30 @@ def _candidates_for_remove(in_obj: ObjFact, in_facts: GridFacts) -> list[Clause]
             action=Act.REMOVE,
             description=f"remove [{_desc_preds(t_preds)}]",
         )
+        candidates.append(clause)
+
+    return candidates
+
+
+def _candidates_for_transform(m, in_facts):
+    """Generate candidate clauses for an object that was geometrically transformed in place."""
+    candidates = []
+    source = m.in_obj
+    if source is None:
+        return candidates
+
+    target_pred_sets = _generate_target_predicates(source, in_facts)
+    xform = m.transform  # flip_h, flip_v, rot90, etc.
+
+    for t_preds in target_pred_sets:
+        clause = Clause(
+            target_preds=t_preds,
+            support_preds=[],
+            aggregation=Agg.COLOR_OF,
+            action=Act.TRANSFORM,
+            description=f"transform [{_desc_preds(t_preds)}] {xform}",
+        )
+        clause._transform = xform
         candidates.append(clause)
 
     return candidates
@@ -1538,6 +1669,9 @@ def _generate_target_predicates(obj: ObjFact, facts: GridFacts) -> list[list[Pre
         singles.append(Predicate(Pred.IS_LINE))
     if not (obj.touches_top or obj.touches_bottom or obj.touches_left or obj.touches_right):
         singles.append(Predicate(Pred.NOT_TOUCHES_BORDER))
+    # Note: positional predicates (IS_TOPMOST etc.) are available in the Pred enum
+    # and used by selector search / dispatch, but NOT generated here in clause induction
+    # to avoid candidate proliferation that breaks bounded 2-clause composition.
     singles.append(Predicate(Pred.SIZE_GT, 1))
 
     # Relational predicates: check relationships to other objects
@@ -1589,7 +1723,8 @@ def _generate_target_predicates(obj: ObjFact, facts: GridFacts) -> list[list[Pre
     _size_preds = {Pred.IS_SMALLEST, Pred.IS_LARGEST, Pred.SIZE_GT, Pred.IS_SINGLETON}
     _color_preds = {Pred.COLOR_EQ, Pred.UNIQUE_COLOR}
     _shape_preds = {Pred.IS_RECTANGULAR, Pred.IS_LINE, Pred.SAME_SHAPE_AS}
-    _pos_preds = {Pred.NOT_TOUCHES_BORDER, Pred.TOUCHES_BORDER}
+    _pos_preds = {Pred.NOT_TOUCHES_BORDER, Pred.TOUCHES_BORDER,
+                   Pred.IS_TOPMOST, Pred.IS_BOTTOMMOST, Pred.IS_LEFTMOST, Pred.IS_RIGHTMOST}
     _rel_preds = {Pred.ADJACENT_TO, Pred.CONTAINED_BY, Pred.CONTAINS}
     _neg_preds = {Pred.NOT}
 
