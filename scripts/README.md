@@ -10,9 +10,16 @@ Current primary entrypoints:
 Supporting utilities that are still intentionally top-level:
 
 - `run_task.py`: single-task debug runner
-- `regression.py`: guided regression harness
+- `regression.py`: regression harness
 - `prepare_hf_dataset.py`, `train_lora.py`: training and export utilities
+- `corpus_report.json`, `extraction_report.json`: retained input artifacts still used as defaults by older utility scripts
 
-Legacy experiment runners live under `scripts/legacy/experiments/`.
+Legacy experiment runners and offline-era utilities live under:
+
+- `scripts/legacy/experiments/`
+- `scripts/legacy/evals/`
+- `scripts/legacy/offline/`
+- `scripts/legacy/analysis/`
+
 They are retained for reference, but they are not part of the current
 canonical `aria/search` workflow.
