@@ -50,6 +50,12 @@ def derive_from_binding(
     # Strategy 3: workspace crop (output = subregion of bound workspace)
     progs = _try_workspace_crop(demos, binding)
     results.extend(progs)
+    if results:
+        return results
+
+    # Strategy 4: object-level legend highlight (P0 shapes → workspace motif match → 8→3)
+    progs = _try_object_highlight(demos)
+    results.extend(progs)
 
     return results
 
@@ -278,3 +284,88 @@ def _try_workspace_crop(demos, binding):
                             return [prog]
 
     return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 4: Object-level legend highlight
+# ---------------------------------------------------------------------------
+
+def _try_object_highlight(demos):
+    """Legend-driven object highlight with induced symbolic rules.
+
+    P0 is the variable legend panel. Workspace panels P1..Pn contain motif objects.
+
+    Induced rules (verified across all demos):
+    1. shape_match(panel): panel has ≥1 motif whose shape is in P0's shapes
+    2. band_fill(panel): panel.n_motifs < P0.n_motifs AND panel.colors ∩ P0.colors = ∅
+    3. panel_highlight(panel): shape_match OR band_fill
+    4. P0_highlight: any workspace panel is a full_match OR all workspace panels highlight
+
+    Highlight execution:
+    - Full-match panel: entire interior (cols 1..W-2) gets ground→highlight
+    - Partial shape match: slot-width around each matched motif
+    - Band-fill panel: entire interior (cols 1..W-2) gets ground→highlight
+    - P0 when highlighted: entire interior
+    - Separator: first ground-colored row after each highlighted panel
+    - Bottom band: last 2 rows always get ground→highlight
+    """
+    from aria.guided.perceive import perceive
+    from aria.search.motif import extract_motifs, extract_panel_facts
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    inp0, out0 = demos[0]
+    facts0 = perceive(inp0)
+    row_seps = sorted(set(s.index for s in facts0.separators if s.axis == 'row'))
+    if len(row_seps) < 4:
+        return []
+
+    r_bounds = [0] + row_seps + [inp0.shape[0]]
+    panels0 = [(r_bounds[i], r_bounds[i+1])
+               for i in range(len(r_bounds) - 1) if r_bounds[i+1] - r_bounds[i] >= 3]
+    if len(panels0) < 3:
+        return []
+
+    # Infer ground and highlight colors
+    diff = (inp0 != out0)
+    if diff.sum() == 0:
+        return []
+    from collections import Counter
+    old_vals = Counter(int(inp0[r, c]) for r, c in zip(*np.where(diff)))
+    new_vals = Counter(int(out0[r, c]) for r, c in zip(*np.where(diff)))
+    if len(old_vals) != 1 or len(new_vals) != 1:
+        return []
+    ground = list(old_vals.keys())[0]
+    highlight = list(new_vals.keys())[0]
+
+    # Derive bottom band color: when P0 is NOT highlighted, the bottom band
+    # may use a different color. Learn this from training demos.
+    from aria.search.sketch import _exec_object_highlight_full
+    from aria.search.motif import extract_motifs as _em, extract_panel_facts as _epf
+
+    bottom_alt_color = None
+    for inp_i, out_i in demos:
+        h_i = inp_i.shape[0]
+        # Check if bottom band uses a different color
+        bb_colors = set(int(out_i[r, c]) for r in range(h_i - 2, h_i)
+                        for c in range(inp_i.shape[1]) if inp_i[r, c] == ground)
+        if bb_colors and bb_colors != {highlight}:
+            bottom_alt_color = list(bb_colors)[0]
+            break
+
+    params = {'ground': ground, 'highlight': highlight}
+    if bottom_alt_color is not None:
+        params['bottom_alt_color'] = bottom_alt_color
+
+    # Verify the full rule on all demos using the executor
+    for inp, out in demos:
+        pred = _exec_object_highlight_full(inp, params)
+        if not np.array_equal(pred, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('object_highlight', params)],
+        provenance='binding:object_highlight',
+    )
+    return [prog]

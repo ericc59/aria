@@ -193,6 +193,13 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         params = node.param or {}
         return _exec_anomaly_halo(grid, params)
 
+    if op == Op.OBJECT_HIGHLIGHT:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_object_highlight_ast(grid, params)
+
     if op == Op.CAVITY_TRANSFER:
         grid = _child(node, 0, inp, ctx)
         if grid is None:
@@ -1006,6 +1013,12 @@ def _exec_frame_bbox_pack_ast(grid, params):
     """Execute frame-bbox pack from AST."""
     from aria.search.sketch import _do_frame_bbox_pack
     return _do_frame_bbox_pack(grid, params)
+
+
+def _exec_object_highlight_ast(grid, params):
+    """Execute object highlight from AST."""
+    from aria.search.sketch import _exec_object_highlight_full
+    return _exec_object_highlight_full(grid, params)
 
 
 def _exec_quadrant_template_decode(grid, params):

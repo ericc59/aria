@@ -79,6 +79,7 @@ class Op(Enum):
     CROSS_STENCIL_RECOLOR = auto()     # Grid → Grid  param: {old_color, new_color}
     LEGEND_FRAME_FILL = auto()         # Grid → Grid  param: {color_map: dict}
     ANOMALY_HALO = auto()              # Grid → Grid  param: {c1, c2, halo_color}
+    OBJECT_HIGHLIGHT = auto()          # Grid → Grid  param: {ground, highlight, bottom_alt_color?}
     CAVITY_TRANSFER = auto()           # Grid → Grid  param: {mode: 'auto'}
 
     # Object-level actions

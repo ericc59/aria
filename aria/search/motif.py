@@ -10,7 +10,6 @@ NOT an execution layer. NOT part of the AST.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from scipy.ndimage import label
@@ -89,74 +88,51 @@ def extract_motifs(
 
     return motifs
 
-
 # ---------------------------------------------------------------------------
-# Shape-only signatures (color-agnostic, position-agnostic)
-# ---------------------------------------------------------------------------
-
-def shape_set(panel: np.ndarray, bg: int = 0, ground: int = 8) -> frozenset[Motif]:
-    """Get the set of unique motif shapes in a panel."""
-    return frozenset(pm.motif for pm in extract_motifs(panel, bg, ground))
-
-
-# ---------------------------------------------------------------------------
-# Layout-aware signatures
+# Panel fact extraction (for rule-based derivation)
 # ---------------------------------------------------------------------------
 
-@dataclass(frozen=True)
-class LayoutSlot:
-    """A motif placed in a normalized position within a panel."""
-    motif: Motif
-    bucket_row: int   # coarse row position (0 = top, 1 = mid, 2 = bottom)
-    bucket_col: int   # coarse col position (bucketed by panel width)
+@dataclass
+class PanelFacts:
+    """Derived relational facts about a panel relative to a legend (P0)."""
+    index: int
+    n_motifs: int
+    shapes: frozenset          # set of Motif shapes in this panel
+    colors: frozenset          # set of motif colors
+    n_matched: int             # motifs whose shape is in p0_shapes
+    n_unmatched: int
+    full_match: bool           # all motifs match P0
+    any_match: bool            # at least one motif matches P0
+    color_overlap: frozenset   # colors shared with P0
+    color_disjoint: bool       # no shared colors with P0
+    fewer_motifs: bool         # fewer motifs than P0
 
 
-def panel_layout(
+def extract_panel_facts(
     panel: np.ndarray,
+    index: int,
+    p0_shapes: frozenset,
+    p0_colors: frozenset,
+    p0_n_motifs: int,
     bg: int = 0,
     ground: int = 8,
-    n_col_buckets: int = 4,
-) -> frozenset[LayoutSlot]:
-    """Get a layout-aware signature for a panel.
+) -> PanelFacts:
+    """Extract structured facts about a panel relative to P0."""
+    motifs = extract_motifs(panel, bg, ground, min_cells=2)
+    shapes = frozenset(m.motif for m in motifs)
+    colors = frozenset(m.color for m in motifs)
+    matched = [m for m in motifs if m.motif in p0_shapes]
 
-    Each motif's position is bucketed into coarse column slots
-    (row bucketing uses the 3-row panel height → row = exact row).
-    """
-    placed = extract_motifs(panel, bg, ground)
-    h, w = panel.shape
-    col_bucket_size = max(w // n_col_buckets, 1)
-
-    slots = []
-    for pm in placed:
-        bucket_r = min(pm.row, h - 1)  # for 3-row panels, row IS the bucket
-        bucket_c = int(pm.center_col // col_bucket_size)
-        slots.append(LayoutSlot(
-            motif=pm.motif,
-            bucket_row=bucket_r,
-            bucket_col=bucket_c,
-        ))
-
-    return frozenset(slots)
-
-
-def layout_overlap(layout_a: frozenset[LayoutSlot],
-                   layout_b: frozenset[LayoutSlot]) -> int:
-    """Count how many layout slots are shared between two panels."""
-    return len(layout_a & layout_b)
-
-
-# ---------------------------------------------------------------------------
-# Positional motif matching (exact position, shape-only)
-# ---------------------------------------------------------------------------
-
-def positional_motif_set(
-    panel: np.ndarray,
-    bg: int = 0,
-    ground: int = 8,
-) -> frozenset[tuple[Motif, int, int]]:
-    """Motif set with exact (row, col) anchor positions.
-
-    This is the strictest comparison: same shape at same position.
-    """
-    placed = extract_motifs(panel, bg, ground)
-    return frozenset((pm.motif, pm.row, pm.col) for pm in placed)
+    return PanelFacts(
+        index=index,
+        n_motifs=len(motifs),
+        shapes=shapes,
+        colors=colors,
+        n_matched=len(matched),
+        n_unmatched=len(motifs) - len(matched),
+        full_match=len(matched) > 0 and len(matched) == len(motifs),
+        any_match=len(matched) > 0,
+        color_overlap=colors & p0_colors,
+        color_disjoint=len(colors & p0_colors) == 0,
+        fewer_motifs=len(motifs) < p0_n_motifs,
+    )

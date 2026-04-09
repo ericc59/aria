@@ -778,14 +778,10 @@ def _derive_anomaly_halo(demos):
     In one region, anomalies get a halo of a new color around them.
     In the other region, anomalies are simply removed (filled with region color).
     """
-    from aria.guided.perceive import perceive
-
     if any(inp.shape != out.shape for inp, out in demos):
         return []
 
     inp0, out0 = demos[0]
-    facts0 = perceive(inp0)
-    bg = facts0.bg
     h, w = inp0.shape
 
     # Need exactly 2 dominant colors + 1 halo color in the output
@@ -812,63 +808,9 @@ def _derive_anomaly_halo(demos):
     if halo_color is None:
         return []
 
-    # Try the anomaly-halo rule:
-    # For each cell of c2 in a "c1-region" → anomaly: halo its 8-neighbors with halo_color
-    # For each cell of c1 in a "c2-region" → noise: remove (set to c2)
-    # A cell's "region" is determined by the majority of its wider neighborhood
-
-    # Simple approach: anomaly = cell differs from the majority of its 8-neighbors
-    # For c2-anomalies in c1-region: add halo
-    # For c1-anomalies in c2-region: remove
-
-    candidate = inp0.copy()
-    anomalies_c2_in_c1 = []  # c2 cells surrounded by c1
-    anomalies_c1_in_c2 = []  # c1 cells surrounded by c2
-
-    for r in range(h):
-        for c in range(w):
-            v = int(inp0[r, c])
-            if v != c1 and v != c2:
-                continue
-            # Count neighbors
-            n1 = 0
-            n2 = 0
-            for dr in [-1, 0, 1]:
-                for dc in [-1, 0, 1]:
-                    if dr == 0 and dc == 0:
-                        continue
-                    nr, nc = r + dr, c + dc
-                    if 0 <= nr < h and 0 <= nc < w:
-                        nv = int(inp0[nr, nc])
-                        if nv == c1:
-                            n1 += 1
-                        elif nv == c2:
-                            n2 += 1
-
-            if v == c2 and n1 > n2:  # c2-cell in c1-region
-                anomalies_c2_in_c1.append((r, c))
-            elif v == c1 and n2 > n1:  # c1-cell in c2-region
-                anomalies_c1_in_c2.append((r, c))
-
-    if not anomalies_c2_in_c1 and not anomalies_c1_in_c2:
-        return []
-
-    # Apply: remove c1-in-c2 noise
-    for r, c in anomalies_c1_in_c2:
-        candidate[r, c] = c2
-
-    # Apply: halo around c2-in-c1 anomalies (all neighbors except other anomalies)
-    anomaly_set_minor = set(anomalies_c2_in_c1)
-    for r, c in anomalies_c2_in_c1:
-        for dr in [-1, 0, 1]:
-            for dc in [-1, 0, 1]:
-                if dr == 0 and dc == 0:
-                    continue
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in anomaly_set_minor:
-                    candidate[nr, nc] = halo_color
-
-    # Verify ALL demos (including demo 0) using the actual executor
+    # Verify using the actual executor semantics only. Older derive-side
+    # neighborhood heuristics were stricter than the runtime behavior and
+    # created false negatives in search.
     from aria.search.executor import _exec_anomaly_halo
     params = {'c1': c1, 'c2': c2, 'halo_color': halo_color}
     for inp, out in demos:
@@ -992,92 +934,18 @@ def _derive_legend_frame_fill(demos):
     NOT reached are enclosed by that color's boundary. Fill them with a
     derived color (from a legend, or the boundary color itself).
     """
-    from aria.guided.perceive import perceive
-    from collections import deque
-
     if any(inp.shape != out.shape for inp, out in demos):
         return []
 
     inp0, out0 = demos[0]
-    facts0 = perceive(inp0)
-    bg = facts0.bg
-    h, w = inp0.shape
 
     changed = (inp0 != out0)
     if changed.sum() == 0:
         return []
 
-    # For each non-bg color, find enclosed bg regions
-    non_bg_colors = set(int(inp0[r, c]) for r in range(h) for c in range(w) if inp0[r, c] != bg)
-
-    def _find_enclosed(grid, wall_colors, bg_val):
-        """Find bg cells not reachable from border through non-wall cells."""
-        gh, gw = grid.shape
-        reachable = np.zeros((gh, gw), dtype=bool)
-        q = deque()
-        # Seed from border bg cells
-        for r in range(gh):
-            for c in [0, gw - 1]:
-                if grid[r, c] == bg_val and not reachable[r, c]:
-                    reachable[r, c] = True
-                    q.append((r, c))
-        for c in range(gw):
-            for r in [0, gh - 1]:
-                if grid[r, c] == bg_val and not reachable[r, c]:
-                    reachable[r, c] = True
-                    q.append((r, c))
-        while q:
-            r, c = q.popleft()
-            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < gh and 0 <= nc < gw and not reachable[nr, nc]:
-                    if grid[nr, nc] == bg_val:
-                        reachable[nr, nc] = True
-                        q.append((nr, nc))
-        # Enclosed = bg but not reachable
-        enclosed = np.zeros((gh, gw), dtype=bool)
-        for r in range(gh):
-            for c in range(gw):
-                if grid[r, c] == bg_val and not reachable[r, c]:
-                    enclosed[r, c] = True
-        return enclosed
-
-    # Try: for each color C, use C as walls, find enclosed bg, fill with derived color
-    # Derive the fill color from what the output shows
-    best_map = None
-    for wall_color in non_bg_colors:
-        # Create a view where wall_color cells are walls
-        wall_grid = np.where(inp0 == wall_color, wall_color, bg)
-        enclosed = _find_enclosed(wall_grid, {wall_color}, bg)
-
-        if enclosed.sum() == 0:
-            continue
-
-        # What color fills the enclosed cells in the output?
-        fill_colors = set(int(out0[r, c]) for r, c in zip(*np.where(enclosed)) if out0[r, c] != bg)
-        if len(fill_colors) != 1:
-            continue
-        fill_color = fill_colors.pop()
-
-        # Record this mapping
-        if best_map is None:
-            best_map = {}
-        best_map[wall_color] = fill_color
-
-    if not best_map:
-        return []
-
-    # Build candidate using all discovered fills
-    candidate = inp0.copy()
-    for wall_color, fill_color in best_map.items():
-        wall_grid = np.where(inp0 == wall_color, wall_color, bg)
-        enclosed = _find_enclosed(wall_grid, {wall_color}, bg)
-        candidate[enclosed] = fill_color
-
-    if not np.array_equal(candidate, out0):
-        return []
-
-    # Verify ALL demos (including demo 0) using the actual executor
+    # Verify using the actual executor semantics only. Older derive-side
+    # reconstruction peeked into demo outputs and could reject tasks that the
+    # emitted enclosed-fill executor would solve.
     from aria.search.executor import _exec_legend_frame_fill
     params = {'strategy': 'enclosed_fill'}
     for inp, out in demos:

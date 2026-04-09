@@ -207,6 +207,8 @@ class SearchProgram:
             elif step.action == 'anomaly_halo':
                 from aria.search.executor import _exec_anomaly_halo
                 result = _exec_anomaly_halo(result, step.params or {})
+            elif step.action == 'object_highlight':
+                result = _exec_object_highlight_full(result, step.params or {})
             elif step.action == 'cavity_transfer':
                 # Experimental — not canonical, kept for search-time derivation only
                 from aria.search.executor import _exec_cavity_transfer_auto
@@ -474,11 +476,12 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.LEGEND_FRAME_FILL, [ASTNode(Op.INPUT)], param=p)
     if action == 'anomaly_halo':
         return ASTNode(Op.ANOMALY_HALO, [ASTNode(Op.INPUT)], param=p)
+    if action == 'object_highlight':
+        return ASTNode(Op.OBJECT_HIGHLIGHT, [ASTNode(Op.INPUT)], param=p)
     if action == 'cavity_transfer':
         return ASTNode(Op.CAVITY_TRANSFER, [ASTNode(Op.INPUT)], param=p)
 
-    # Fallback
-    return ASTNode(Op.HOLE, param=f'unknown:{action}')
+    raise ValueError(f"Unknown search action for AST lowering: {action}")
 
 
 def _exec_quadrant_template_decode(inp, step):
@@ -537,6 +540,197 @@ def _exec_quadrant_template_decode(inp, step):
         if applied is not None:
             r0, r1, c0, c1 = quads_rc[qi]
             result[r0:r1, c0:c1] = applied
+
+    return result
+
+
+def _exec_object_highlight_full(inp, params):
+    """Execute full object-level highlight with induced symbolic rules.
+
+    Rules:
+    1. shape_match: panel has motif in P0's shapes → highlight matched slots
+       - n_unmatched <= 1 → full panel interior (cols 1..W-2)
+       - n_unmatched > 1 → slot-width union around matched motifs
+    2. band_fill: when workspace shape→slot mapping is order-preserving and
+       there is no full-match panel, propagate a fallback slot into panels
+       with no shape matches that do not already occupy that slot
+    3. P0_highlight: any_full_match OR all_ws_highlight → full width (cols 0..W-1)
+    4. Separator: first ground-colored row after each highlighted panel
+       (same column range as the panel)
+    5. Bottom band: last 2 rows, full width
+    """
+    from aria.guided.perceive import perceive
+    from aria.search.motif import extract_motifs, extract_panel_facts
+
+    ground = params.get('ground', 8)
+    highlight = params.get('highlight', 3)
+
+    facts = perceive(inp)
+    rs = sorted(set(s.index for s in facts.separators if s.axis == 'row'))
+    rb = [0] + rs + [inp.shape[0]]
+    panels = [(rb[i], rb[i+1]) for i in range(len(rb)-1) if rb[i+1]-rb[i] >= 3]
+    if len(panels) < 2:
+        return inp
+
+    h, w = inp.shape
+    r0_0, r1_0 = panels[0]
+    p0_motifs = extract_motifs(inp[r0_0:r1_0, :], bg=0, ground=ground, min_cells=2)
+    p0_shapes = frozenset(m.motif for m in p0_motifs)
+    p0_colors = frozenset(m.color for m in p0_motifs)
+    p0_n = len(p0_motifs)
+    p0_order = {m.motif: i for i, m in enumerate(sorted(p0_motifs, key=lambda m: m.col))}
+
+    result = inp.copy()
+    highlighted = {}  # pi → (c_lo, c_hi) column range
+
+    # Track matched-shape -> workspace-slot mapping for band-fill propagation.
+    shape_slot_map = {i: set() for i in range(len(p0_order))}
+    panel_slots = {}
+    panel_matches = {}
+    any_full = False
+
+    def _slot_id(anchor_col: int) -> int | None:
+        c = anchor_col + 1
+        if 1 <= c <= 5:
+            return 0
+        if 6 <= c <= 10:
+            return 1
+        if 11 <= c <= 15:
+            return 2
+        if 16 <= c <= 20:
+            return 3
+        return None
+
+    # --- Pass 1: compute facts and highlight shape-matched panels ---
+    ws_facts = []
+    for pi, (r0, r1) in enumerate(panels[1:], 1):
+        pf = extract_panel_facts(inp[r0:r1, :], pi, p0_shapes, p0_colors, p0_n,
+                                  bg=0, ground=ground)
+        ws_facts.append((pi, r0, r1, pf))
+        motifs = extract_motifs(inp[r0:r1, :], bg=0, ground=ground, min_cells=2)
+        panel_slots[pi] = {sid for sid in (_slot_id(m.col) for m in motifs) if sid is not None}
+
+        if pf.any_match:
+            matched = [m for m in motifs if m.motif in p0_shapes]
+            panel_matches[pi] = matched
+            for m in matched:
+                sid = _slot_id(m.col)
+                if sid is not None:
+                    shape_slot_map[p0_order[m.motif]].add(sid)
+
+            if pf.n_unmatched == 0:
+                # All match → full panel interior
+                any_full = True
+                for r in range(r0, r1):
+                    for c in range(1, w - 1):
+                        if result[r, c] == ground:
+                            result[r, c] = highlight
+                highlighted[pi] = (1, w - 1)  # exclusive end (w-1 is last col, range goes to w-1)
+            else:
+                # Zone-based: each motif owns a column zone (midpoints between neighbors)
+                sorted_motifs = sorted(motifs, key=lambda m: m.col)
+                zones = {}
+                for mi, m in enumerate(sorted_motifs):
+                    mc = m.col + m.motif.bbox_w // 2
+                    if mi == 0:
+                        z_lo = 1
+                    else:
+                        prev_m = sorted_motifs[mi - 1]
+                        prev_mc = prev_m.col + prev_m.motif.bbox_w // 2
+                        z_lo = (prev_mc + mc + 1) // 2
+                    if mi == len(sorted_motifs) - 1:
+                        z_hi = w - 2
+                    else:
+                        next_m = sorted_motifs[mi + 1]
+                        next_mc = next_m.col + next_m.motif.bbox_w // 2
+                        z_hi = (mc + next_mc - 1) // 2
+                    zones[m.motif] = (max(1, z_lo), min(w - 2, z_hi))
+
+                # Fill zones of matched motifs (keep separate zones)
+                panel_zones = []
+                for m in matched:
+                    z_lo, z_hi = zones.get(m.motif, (1, w - 2))
+                    panel_zones.append((z_lo, z_hi + 1))  # exclusive end
+                    for r in range(r0, r1):
+                        for c in range(z_lo, z_hi + 1):
+                            if result[r, c] == ground:
+                                result[r, c] = highlight
+
+                if panel_zones:
+                    highlighted[pi] = panel_zones  # list of (start, end_exclusive)
+        else:
+            panel_matches[pi] = []
+
+    # --- Pass 2: band-fill panels inherit a propagated fallback slot ---
+    mapped_keys = [k for k, slots in shape_slot_map.items() if slots]
+    monotonic_mapping = (
+        bool(mapped_keys)
+        and all(
+            min(shape_slot_map[mapped_keys[i]]) <= min(shape_slot_map[mapped_keys[i + 1]])
+            for i in range(len(mapped_keys) - 1)
+        )
+    )
+
+    if monotonic_mapping and not any_full:
+        common_slots = None
+        for pi, _, _, pf in ws_facts:
+            if not pf.any_match:
+                continue
+            slots = {sid for sid in (_slot_id(m.col) for m in panel_matches[pi]) if sid is not None}
+            common_slots = slots if common_slots is None else (common_slots & slots)
+
+        if common_slots:
+            target_slot = min(common_slots)
+        else:
+            target_slot = min(min(slots) for slots in shape_slot_map.values() if slots)
+
+        # Workspace panels use four canonical 5-column slots inside cols 1..20.
+        c_lo = 1 + 5 * target_slot
+        c_hi = min(c_lo + 5, w - 1)  # exclusive end
+        for pi, r0, r1, pf in ws_facts:
+            if pf.any_match or target_slot in panel_slots.get(pi, set()):
+                continue
+            highlighted[pi] = (c_lo, c_hi)
+            for r in range(r0, r1):
+                for c in range(c_lo, c_hi):
+                    if result[r, c] == ground:
+                        result[r, c] = highlight
+
+    # --- Rule 3: P0 highlight (full width) ---
+    all_ws_hl = all(pi in highlighted for pi, _, _, _ in ws_facts)
+    p0_hl = any_full or all_ws_hl
+
+    if p0_hl:
+        highlighted[0] = (0, w)
+        r0, r1 = panels[0]
+        for r in range(r0, r1):
+            for c in range(w):
+                if result[r, c] == ground:
+                    result[r, c] = highlight
+
+    # --- Rule 4: Separator propagation ---
+    content_rows = set(r for r0, r1 in panels for r in range(r0, r1))
+    for pi, ranges in sorted(highlighted.items()):
+        _, r1_p = panels[pi]
+        # ranges is either (start, end_exclusive) or list of (start, end_exclusive)
+        if isinstance(ranges, tuple):
+            ranges = [ranges]
+        for r in range(r1_p, h):
+            if r in content_rows:
+                break
+            if int(inp[r, 0]) == ground:
+                for c_lo, c_hi in ranges:
+                    for c in range(c_lo, c_hi):
+                        if result[r, c] == ground:
+                            result[r, c] = highlight
+                break
+
+    # --- Rule 5: Bottom band (last 2 rows, full width) ---
+    bb_color = highlight if p0_hl else params.get('bottom_alt_color', highlight)
+    for r in range(h - 2, h):
+        for c in range(w):
+            if result[r, c] == ground:
+                result[r, c] = bb_color
 
     return result
 
