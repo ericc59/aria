@@ -1,8 +1,10 @@
-"""Evaluation harness for running the offline solver on a dataset.
+"""Evaluation harness for running the current guided+search solver.
 
-Produces a machine-readable results dict compatible with the existing
-solve-report format, plus dataset-level metadata and transfer-quality
-metrics.
+This module is the bridge from dataset iteration/reporting to the newer
+``aria.solve.solve_task`` entrypoint. It keeps the persisted report shape
+roughly stable while routing evaluation through the canonical
+``guided -> aria/search`` path instead of the older offline/refinement
+solver stack.
 """
 
 from __future__ import annotations
@@ -16,17 +18,19 @@ from aria.datasets import DatasetInfo, iter_tasks
 from aria.library.store import Library
 from aria.program_store import ProgramStore
 from aria.reporting import build_solve_report, extract_library_ops_used
-from aria.reporting import extract_op_names
-from aria.retrieval import retrieval_provenance
-from aria.runtime.program import program_to_text
-from aria.solver import SolveResult, solve_task
+from aria.solve import solve_task
 from aria.trace_store import RefinementTraceStore
 from aria.types import LibraryEntry, grid_eq
 
 
 @dataclass(frozen=True)
 class EvalConfig:
-    """Solver parameters for an evaluation run."""
+    """Solver parameters for an evaluation run.
+
+    Most historical refinement/retrieval fields are kept for CLI/report
+    compatibility, but the active eval path now uses ``time_budget_sec`` and
+    the canonical ``aria.solve`` entrypoint.
+    """
 
     retrieval_limit: int = 0
     max_search_steps: int = 3
@@ -37,6 +41,7 @@ class EvalConfig:
     beam_rounds: int = 3
     beam_mutations_per_candidate: int = 30
     rerank_edits: bool = True
+    time_budget_sec: float = 30.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -49,7 +54,20 @@ class EvalConfig:
             "beam_rounds": self.beam_rounds,
             "beam_mutations_per_candidate": self.beam_mutations_per_candidate,
             "rerank_edits": self.rerank_edits,
+            "time_budget_sec": self.time_budget_sec,
         }
+
+
+def _execute_on_test(task, program) -> list[Any]:
+    """Execute a guided or AST-backed program on the task test inputs."""
+    return [program.execute(test_pair.input) for test_pair in task.test]
+
+
+def _program_text(program: Any) -> str:
+    """Best-effort text form for reporting and submissions."""
+    if hasattr(program, "description") and isinstance(program.description, str):
+        return program.description
+    return repr(program)
 
 
 def evaluate_task(
@@ -63,205 +81,50 @@ def evaluate_task(
     freeze_stores: bool = True,
 ) -> dict[str, Any]:
     """Evaluate a single task and return a result dict."""
-    task_lib = library.clone() if freeze_stores else library
-    task_ps = program_store.clone() if (program_store is not None and freeze_stores) else program_store
-
     t0 = time.time()
     result = solve_task(
-        task,
-        library=task_lib,
-        program_store=task_ps,
-        task_id=task_id,
-        retrieval_limit=config.retrieval_limit,
-        max_search_steps=config.max_search_steps,
-        max_search_candidates=config.max_search_candidates,
-        max_refinement_rounds=config.max_refinement_rounds,
-        include_core_ops=config.include_core_ops,
-        beam_width=config.beam_width,
-        beam_rounds=config.beam_rounds,
-        beam_mutations_per_candidate=config.beam_mutations_per_candidate,
-        rerank_edits=config.rerank_edits,
+        list((pair.input, pair.output) for pair in task.train),
+        time_budget=config.time_budget_sec,
     )
     elapsed = time.time() - t0
-
-    _persist_trace(trace_store, result)
+    del trace_store, freeze_stores, library, program_store
 
     outcome: dict[str, Any] = {
         "task_id": task_id,
-        "solved": result.solved,
+        "solved": result["program"] is not None,
         "time_sec": round(elapsed, 2),
-        "retrieved": result.retrieved,
-        "searched": result.searched,
-        "retrieval_candidates_tried": result.retrieval_candidates_tried,
-        "search_candidates_tried": result.search_candidates_tried,
-        "refinement_rounds": result.refinement_rounds,
-        "total_candidates": (
-            result.retrieval_candidates_tried
-            if result.retrieved
-            else result.search_candidates_tried
-        ),
-        "solve_source": (
-            "retrieval" if result.retrieved else "search" if result.solved else "unsolved"
-        ),
-        "abstractions_mined": result.abstractions_mined,
-        "task_signatures": list(result.task_signatures),
+        "retrieved": False,
+        "searched": result["source"] in ("search", None),
+        "retrieval_candidates_tried": 0,
+        "search_candidates_tried": 0,
+        "refinement_rounds": 0,
+        "total_candidates": 0,
+        "solve_source": result["source"] or "unsolved",
+        "abstractions_mined": 0,
+        "task_signatures": [],
+        "solve_phase": result["source"] or "unsolved",
+        "abstraction_hints_available": False,
     }
 
-    if result.solved and result.winning_program is not None:
-        program_text = program_to_text(result.winning_program)
+    if outcome["solved"]:
+        program = result["program"]
+        test_outputs = _execute_on_test(task, program)
+        program_text = _program_text(program)
         outcome["program"] = program_text
-        outcome["library_ops_used"] = extract_library_ops_used(
-            program_text, (library.names() if library else []),
-        )
-        outcome["test_outputs"] = [g.tolist() for g in result.test_outputs]
+        outcome["description"] = result.get("description", "")
+        outcome["test_outputs"] = [g.tolist() for g in test_outputs]
         test_results = []
-        for idx, (test_pair, output) in enumerate(zip(task.test, result.test_outputs)):
+        for idx, (test_pair, output) in enumerate(zip(task.test, test_outputs)):
             correct = grid_eq(output, test_pair.output)
             test_results.append({"test_idx": idx, "correct": correct})
         outcome["test_results"] = test_results
-
-    # Attach retrieval provenance when solved via retrieval
-    if result.retrieved and result.winning_program is not None and program_store is not None:
-        prov = _lookup_provenance(program_store, result.winning_program)
-        if prov is not None:
-            outcome["retrieval_provenance"] = prov
-
-    # Track abstraction-guided search
-    rr = result.refinement_result
-    if rr is not None and rr.abstraction_hints:
-        hint_names = frozenset(h.name for h in rr.abstraction_hints)
-        outcome["abstraction_hints_count"] = len(rr.abstraction_hints)
-        outcome["abstraction_hints_available"] = True
-        if result.solved and result.winning_program is not None:
-            winning_text = program_to_text(result.winning_program)
-            winning_ops = extract_op_names(winning_text)
-            used = sorted(hint_names & winning_ops)
-            outcome["solved_with_retrieved_abstraction"] = bool(used)
-            outcome["retrieved_abstractions_used"] = used
-        else:
-            outcome["solved_with_retrieved_abstraction"] = False
+        outcome["library_ops_used"] = extract_library_ops_used(program_text, [])
     else:
-        outcome["abstraction_hints_available"] = bool(
-            rr is not None and rr.abstraction_hints
-        )
-
-    # Track skeleton hypothesis testing
-    if rr is not None and rr.skeleton_result is not None:
-        sr = rr.skeleton_result
-        outcome["skeleton_hypotheses_tested"] = sr.skeletons_tested
-        outcome["solved_by_skeleton"] = sr.solved
-
-        if not sr.solved and sr.hypotheses:
-            best = _best_near_miss(sr.hypotheses)
-            if best is not None:
-                outcome["skeleton_near_miss"] = {
-                    "source": best.source,
-                    "error_type": best.error_type,
-                    "program_text": best.program_text,
-                }
-
-    # Dims-change reconstruction reporting
-    if rr is not None and rr.dims_reconstruction is not None:
-        dr = rr.dims_reconstruction
-        outcome["dims_reconstruction_attempted"] = dr.attempted
-        outcome["dims_reconstruction_solved"] = dr.solved
-        outcome["dims_reconstruction_mode"] = dr.mode
-        outcome["inferred_output_dims_source"] = dr.inferred_output_dims_source
-
-    # Failure bucketing for unsolved tasks
-    if not result.solved:
-        outcome["failure_bucket"] = _classify_failure(result)
+        outcome["failure_bucket"] = "search_budget_exhausted"
         cluster = classify_failure_cluster(outcome)
         outcome["failure_cluster"] = cluster["primary"]
         if cluster["secondary"]:
             outcome["failure_cluster_hints"] = cluster["secondary"]
-
-    # Observation provenance: which phase solved and what rules were induced
-    if rr is not None:
-        obs_prov: dict[str, Any] = {}
-
-        # Direct synthesis
-        if rr.synthesis_result is not None:
-            obs_prov["direct_synthesis_tested"] = rr.synthesis_result.candidates_tested
-            obs_prov["direct_synthesis_solved"] = rr.synthesis_result.solved
-
-        # Determine solve phase attribution
-        if result.retrieved:
-            outcome["solve_phase"] = "retrieval"
-        elif rr.synthesis_result is not None and rr.synthesis_result.solved:
-            outcome["solve_phase"] = "direct_synthesis"
-        elif rr.dims_reconstruction is not None and rr.dims_reconstruction.solved:
-            outcome["solve_phase"] = "dims_reconstruction"
-        elif rr.sketch_result is not None and rr.sketch_result.solved:
-            outcome["solve_phase"] = "sketch"
-        elif len(rr.rounds) == 0 and result.solved:
-            # Solved before search rounds — observation or skeleton
-            if rr.skeleton_result and rr.skeleton_result.solved:
-                outcome["solve_phase"] = "skeleton"
-            else:
-                outcome["solve_phase"] = "observation"
-        elif rr.structural_edit_result is not None and rr.structural_edit_result.solved:
-            outcome["solve_phase"] = "structural_edit"
-        elif rr.repair_result is not None and rr.repair_result.solved:
-            outcome["solve_phase"] = "repair"
-        elif result.solved:
-            outcome["solve_phase"] = "search"
-        else:
-            outcome["solve_phase"] = "unsolved"
-
-        # Repair diagnostics
-        if rr.repair_result is not None:
-            outcome["repair_attempted"] = True
-            outcome["repair_solved"] = rr.repair_result.solved
-            outcome["repair_explanations_built"] = rr.repair_result.explanations_built
-            outcome["repair_actions_tried"] = rr.repair_result.repairs_tried
-            outcome["repair_primary_error"] = rr.repair_result.primary_error_class
-            if rr.repair_result.winning_action:
-                outcome["repair_winning_action"] = rr.repair_result.winning_action.kind
-            outcome["grid_repair_found_target"] = (
-                rr.repair_result.repaired_targets is not None
-                and len(rr.repair_result.repaired_targets) > 0
-            )
-            outcome["repair_has_executable_program"] = rr.repair_result.winning_program is not None
-
-        # Sketch refinement diagnostics
-        if rr.sketch_result is not None:
-            sr = rr.sketch_result
-            outcome["sketch_proposed"] = sr.sketches_proposed
-            outcome["sketch_families"] = list(sr.sketch_families)
-            outcome["sketch_compiled"] = sr.sketch_compiled
-            outcome["sketch_compile_failures"] = sr.sketch_compile_failures
-            outcome["sketch_verified"] = sr.sketch_verified
-            outcome["sketch_budget_used"] = sr.sketch_budget_used
-            if sr.winning_family:
-                outcome["sketch_winning_family"] = sr.winning_family
-
-        # Structural edit diagnostics
-        if rr.structural_edit_result is not None:
-            ser = rr.structural_edit_result
-            outcome["structural_edit_tried"] = ser.candidates_tried
-            outcome["structural_edit_solved"] = ser.solved
-            outcome["structural_edit_matched_repaired_target"] = ser.matched_repaired_target
-            if ser.winning_edit:
-                outcome["structural_edit_winning_action"] = ser.winning_edit
-            if ser.winning_family:
-                outcome["structural_edit_winning_family"] = ser.winning_family
-            if ser.family_breakdown:
-                outcome["structural_edit_family_breakdown"] = ser.family_breakdown
-
-            # Reranking diagnostics
-            if ser.reranking is not None:
-                outcome["reranking_applied"] = ser.reranking.applied
-                outcome["reranking_policy_name"] = ser.reranking.policy_name
-                outcome["reranking_changed_order"] = ser.reranking.changed_order
-                outcome["reranking_programs_ranked"] = ser.reranking.programs_ranked
-
-        # Observation rule summary
-        from aria.observe import ObservationSynthesisResult
-        # Count diagnosed rules by kind from the observation result
-        # (stored implicitly — we can reconstruct from refinement result fields)
-        obs_prov["observation_phase_ran"] = True
-        outcome["observation_provenance"] = obs_prov
 
     return outcome
 
@@ -300,7 +163,7 @@ def run_evaluation(
             on_task_done(task_id, outcome)
 
     report_config = {
-        "engine": "offline",
+        "engine": "guided_search",
         "dataset": ds.name,
         "dataset_version": ds.version,
         "dataset_split": ds.split,

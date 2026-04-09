@@ -55,6 +55,10 @@ def main() -> None:
     )
     parser.add_argument("--task", help="Single task ID")
     parser.add_argument("--limit", type=int, default=0, help="Max tasks to evaluate (0=all)")
+    parser.add_argument(
+        "--time-budget", type=float, default=30.0,
+        help="Per-task time budget in seconds for the guided+search solver",
+    )
 
     parser.add_argument("--retrieval-limit", type=int, default=0)
     parser.add_argument("--max-search-steps", type=int, default=3)
@@ -122,6 +126,7 @@ def main() -> None:
         beam_width=args.beam_width,
         beam_rounds=args.beam_rounds,
         beam_mutations_per_candidate=args.beam_mutations_per_candidate,
+        time_budget_sec=args.time_budget,
     )
 
     results_file = (
@@ -142,7 +147,8 @@ def main() -> None:
     print(
         f"Config: steps={config.max_search_steps}, "
         f"cand={config.max_search_candidates}, "
-        f"rounds={config.max_refinement_rounds}"
+        f"rounds={config.max_refinement_rounds}, "
+        f"time_budget={config.time_budget_sec:.1f}s"
         f"{beam_note}"
     )
 
@@ -169,19 +175,27 @@ def main() -> None:
             trace_store.save_json(Path(args.trace_store))
 
         if outcome["solved"]:
+            cand_note = (
+                f", {outcome['total_candidates']} cand"
+                if outcome.get("total_candidates", 0) > 0 else ""
+            )
             print(
                 f"\nSOLVED in {outcome['time_sec']}s "
-                f"({outcome['solve_source']}, {outcome['total_candidates']} cand)"
+                f"({outcome['solve_source']}{cand_note})"
             )
             print(f"\nProgram:\n{outcome.get('program', '')}")
             for tr in outcome.get("test_results", []):
                 status = "CORRECT" if tr["correct"] else "WRONG"
                 print(f"  Test {tr['test_idx']}: {status}")
         else:
+            cand_note = (
+                f", search={outcome['search_candidates_tried']}"
+                if outcome.get("search_candidates_tried", 0) > 0 else ""
+            )
             print(
                 f"\nFAILED after {outcome['time_sec']}s "
-                f"(search={outcome['search_candidates_tried']}, "
-                f"rounds={outcome['refinement_rounds']})"
+                f"(source={outcome.get('solve_phase', 'unsolved')}"
+                f"{cand_note}, rounds={outcome['refinement_rounds']})"
             )
         return
 
@@ -199,9 +213,13 @@ def main() -> None:
             solved_count += 1
         status = "SOLVED" if outcome["solved"] else "      "
         src = f" [{outcome['solve_source']}]" if outcome["solved"] else ""
+        cand_note = (
+            f", {outcome['total_candidates']} cand"
+            if outcome.get("total_candidates", 0) > 0 else ""
+        )
         print(
             f"  [{total_count}] {task_id}: {status} "
-            f"({outcome['time_sec']}s, {outcome['total_candidates']} cand)"
+            f"({outcome['time_sec']}s{cand_note})"
             f"{src}  [{solved_count}/{total_count}]"
         )
         log.info(
