@@ -32,7 +32,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     from aria.guided.synthesize import compute_transitions
 
     # Shape-independent strategies first
-    progs = _derive_object_summary(demos)
+    progs = _derive_object_repack(demos)
+    if progs:
+        return progs
+
+    progs = _derive_symmetry_repair(demos)
     if progs:
         return progs
 
@@ -70,7 +74,6 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     progs = _derive_marker_stamp(demos, all_facts)
     results.extend(progs)
 
-    # (Object summary column moved to shape-independent section above)
 
     return results
 
@@ -725,22 +728,43 @@ def _apply_marker_stamp(grid, facts, templates, bg):
     return result
 
 
-def _derive_object_summary(demos):
-    """Derive object-summary-column programs: output = 1-wide column of color×size per object."""
+
+def _derive_symmetry_repair(demos):
+    """Derive symmetry repair: find damage color that, when repaired by symmetry, produces output."""
     results = []
 
-    # Check: all outputs are 1-wide columns
-    for inp, out in demos:
-        if out.shape[1] != 1:
-            return []
+    # Must be same-shape
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
 
-    # Verify the summary column pattern across all demos
-    prog = SearchProgram(
-        steps=[SearchStep('object_summary_column', {})],
-        provenance='derive:object_summary_column',
-    )
-    if prog.verify(demos):
-        results.append(prog)
+    for damage_color in range(10):
+        prog = SearchProgram(
+            steps=[SearchStep('symmetry_repair', {'damage_color': damage_color})],
+            provenance=f'derive:symmetry_repair_c{damage_color}',
+        )
+        if prog.verify(demos):
+            results.append(prog)
+            return results
+
+    return results
+
+
+def _derive_object_repack(demos):
+    """Derive object-repack programs: output = objects repacked into a new layout."""
+    results = []
+
+    # Try parameter combinations
+    for ordering in ['chain', 'spatial', 'size']:
+        for layout in ['column', 'row']:
+            for payload in ['color_by_area']:
+                params = {'ordering': ordering, 'layout': layout, 'payload': payload}
+                prog = SearchProgram(
+                    steps=[SearchStep('object_repack', params)],
+                    provenance=f'derive:repack_{ordering}_{layout}_{payload}',
+                )
+                if prog.verify(demos):
+                    results.append(prog)
+                    return results  # first verified wins
 
     return results
 

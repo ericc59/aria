@@ -17,26 +17,46 @@ from aria.search.sketch import SearchStep, SearchProgram
 # Panel grid extraction
 # ---------------------------------------------------------------------------
 
-def extract_panel_grid(grid: np.ndarray):
+def extract_panel_grid(grid: np.ndarray, bg: int = None):
     """Extract a grid of panels from uniform separators.
 
     Returns (panels, panel_shape, row_spans, col_spans) or None.
     panels: list of list of np.ndarray (row-major)
+
+    Separators are uniform rows/cols of a NON-background color.
+    If bg is None, tries bg=0 first, then auto-detects.
     """
     h, w = grid.shape
 
-    # Find uniform rows (all same color)
+    if bg is None:
+        # Try bg=0 first (most common), then perceive
+        bg = 0
+        result = _try_extract_panel_grid(grid, bg)
+        if result is not None:
+            return result
+        from aria.guided.perceive import perceive
+        bg = perceive(grid).bg
+        if bg == 0:
+            return None
+        return _try_extract_panel_grid(grid, bg)
+    return _try_extract_panel_grid(grid, bg)
+
+
+def _try_extract_panel_grid(grid, bg):
+    h, w = grid.shape
+
+    # Find uniform rows (all same color, NOT background)
     row_seps = []
     for r in range(h):
         vals = set(int(grid[r, c]) for c in range(w))
-        if len(vals) == 1:
+        if len(vals) == 1 and next(iter(vals)) != bg:
             row_seps.append(r)
 
-    # Find uniform cols
+    # Find uniform cols (NOT background)
     col_seps = []
     for c in range(w):
         vals = set(int(grid[r, c]) for r in range(h))
-        if len(vals) == 1:
+        if len(vals) == 1 and next(iter(vals)) != bg:
             col_seps.append(c)
 
     # Compute spans between separators
@@ -275,10 +295,161 @@ def derive_panel_algebra_programs(demos):
     if prog:
         results.append(prog)
 
+    # Try panel boolean algebra (or, xor, nor, and, nand)
+    progs = _try_panel_boolean(demos)
+    results.extend(progs)
+
     # Try panel periodic repair
     prog = _try_panel_repair(demos)
     if prog:
         results.append(prog)
+
+    return results
+
+
+def panel_boolean_combine(grid: np.ndarray, op_name: str, color: int,
+                          sep_rows=None, sep_cols=None) -> np.ndarray | None:
+    """Boolean combine all aligned panels from a separator grid.
+
+    Extracts panels, computes boolean op on their occupancy masks,
+    renders result with the given color on background.
+
+    sep_rows/sep_cols: if provided, use these as separator positions
+    instead of auto-detecting (enables cross-demo consistency).
+    """
+    from aria.guided.perceive import perceive
+    bg = perceive(grid).bg
+    h, w = grid.shape
+
+    if sep_rows is not None or sep_cols is not None:
+        # Use provided separators
+        row_spans = _spans_from_seps(sep_rows or [], h)
+        col_spans = _spans_from_seps(sep_cols or [], w)
+        ph_set = set(r1 - r0 + 1 for r0, r1 in row_spans)
+        pw_set = set(c1 - c0 + 1 for c0, c1 in col_spans)
+        if len(ph_set) != 1 or len(pw_set) != 1:
+            return None
+        ph, pw = next(iter(ph_set)), next(iter(pw_set))
+        all_panels = [grid[r0:r1 + 1, c0:c1 + 1] for r0, r1 in row_spans for c0, c1 in col_spans]
+    else:
+        result = extract_panel_grid(grid)
+        if result is None:
+            return None
+        panels, (ph, pw), row_spans, col_spans = result
+        all_panels = [panels[ri][ci] for ri in range(len(row_spans)) for ci in range(len(col_spans))]
+
+    if len(all_panels) < 2:
+        return None
+
+    masks = [(p != bg) for p in all_panels]
+
+    _OPS = {
+        'or': lambda ms: ms[0] | ms[1] if len(ms) == 2 else np.any(ms, axis=0),
+        'and': lambda ms: ms[0] & ms[1] if len(ms) == 2 else np.all(ms, axis=0),
+        'xor': lambda ms: ms[0] ^ ms[1] if len(ms) == 2 else (np.sum(ms, axis=0) % 2).astype(bool),
+        'nor': lambda ms: ~(ms[0] | ms[1]) if len(ms) == 2 else ~np.any(ms, axis=0),
+        'nand': lambda ms: ~(ms[0] & ms[1]) if len(ms) == 2 else ~np.all(ms, axis=0),
+    }
+
+    op_fn = _OPS.get(op_name)
+    if op_fn is None:
+        return None
+
+    mask_stack = np.array(masks)
+    combined = op_fn(mask_stack)
+
+    canvas = np.full((ph, pw), bg, dtype=grid.dtype)
+    canvas[combined] = color
+    return canvas
+
+
+def _find_consistent_separator(demos):
+    """Find separator row/col that is consistent across ALL demos."""
+    from aria.guided.perceive import perceive
+
+    # For each demo, find non-bg uniform rows and cols with their colors
+    per_demo_row_seps = []
+    per_demo_col_seps = []
+
+    for inp, _ in demos:
+        bg = perceive(inp).bg
+        h, w = inp.shape
+        row_seps = {}
+        for r in range(h):
+            vals = set(int(inp[r, c]) for c in range(w))
+            if len(vals) == 1 and next(iter(vals)) != bg:
+                row_seps[r] = next(iter(vals))
+        col_seps = {}
+        for c in range(w):
+            vals = set(int(inp[r, c]) for r in range(h))
+            if len(vals) == 1 and next(iter(vals)) != bg:
+                col_seps[c] = next(iter(vals))
+        per_demo_row_seps.append(row_seps)
+        per_demo_col_seps.append(col_seps)
+
+    # Find separator positions consistent across ALL demos
+    # (same position AND same color)
+    if per_demo_col_seps:
+        common_cols = set(per_demo_col_seps[0].keys())
+        for d in per_demo_col_seps[1:]:
+            common_cols &= set(d.keys())
+        # Filter: same color at each position
+        consistent_cols = [c for c in common_cols
+                           if len(set(d.get(c, -1) for d in per_demo_col_seps)) == 1]
+    else:
+        consistent_cols = []
+
+    if per_demo_row_seps:
+        common_rows = set(per_demo_row_seps[0].keys())
+        for d in per_demo_row_seps[1:]:
+            common_rows &= set(d.keys())
+        consistent_rows = [r for r in common_rows
+                           if len(set(d.get(r, -1) for d in per_demo_row_seps)) == 1]
+    else:
+        consistent_rows = []
+
+    return sorted(consistent_rows), sorted(consistent_cols)
+
+
+def _try_panel_boolean(demos):
+    """Try all boolean ops on aligned panels across all demos."""
+    results = []
+    ops = ['or', 'and', 'xor', 'nor', 'nand']
+
+    # Find consistent separators across all demos
+    consistent_rows, consistent_cols = _find_consistent_separator(demos)
+
+    for op_name in ops:
+        # Try each color from the first demo's output
+        from aria.guided.perceive import perceive as _perc
+        bg0 = _perc(demos[0][0]).bg
+        out0 = demos[0][1]
+        out_colors = set(int(out0[r, c]) for r in range(out0.shape[0])
+                         for c in range(out0.shape[1]) if out0[r, c] != bg0)
+        if len(out_colors) != 1:
+            continue
+        render_color = next(iter(out_colors))
+
+        # Verify: does panel_boolean_combine with these params match ALL demos?
+        all_ok = True
+        for inp, out in demos:
+            result = panel_boolean_combine(inp, op_name, render_color,
+                                            sep_rows=consistent_rows, sep_cols=consistent_cols)
+            if result is None or not np.array_equal(result, out):
+                all_ok = False
+                break
+
+        if all_ok and render_color is not None:
+            prog = SearchProgram(
+                steps=[SearchStep('panel_boolean', {
+                    'op': op_name, 'color': render_color,
+                    'sep_rows': consistent_rows, 'sep_cols': consistent_cols,
+                })],
+                provenance=f'panel:bool_{op_name}_c{render_color}',
+            )
+            if prog.verify(demos):
+                results.append(prog)
+                return results  # first verified wins
 
     return results
 

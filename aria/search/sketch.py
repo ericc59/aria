@@ -333,34 +333,15 @@ def _exec_marker_stamp(inp, step):
 
 
 def _exec_panel_boolean(inp, step):
-    """Execute panel boolean algebra."""
-    from aria.search.panels import extract_panels
-    ps = extract_panels(inp)
-    if ps is None:
-        return inp
+    """Execute panel boolean algebra using panel_boolean_combine."""
+    from aria.search.panel_ops import panel_boolean_combine
     p = step.params
-    i, j = p.get('panel_a', 0), p.get('panel_b', 1)
-    if i >= len(ps.panels) or j >= len(ps.panels):
-        return inp
-    a, b = ps.panels[i].grid, ps.panels[j].grid
-    if a.shape != b.shape:
-        return inp
-    bg = ps.bg
     op_name = p.get('op', 'xor')
     color = p.get('color', 0)
-    _OPS = {
-        'and': lambda x, y: x & y, 'or': lambda x, y: x | y,
-        'xor': lambda x, y: x ^ y, 'nor': lambda x, y: ~x & ~y,
-        'nand': lambda x, y: ~(x & y), 'a-b': lambda x, y: x & ~y,
-        'b-a': lambda x, y: y & ~x,
-    }
-    op_fn = _OPS.get(op_name)
-    if op_fn is None:
-        return inp
-    mask = op_fn((a != bg), (b != bg))
-    canvas = np.full(a.shape, bg, dtype=np.uint8)
-    canvas[mask] = color
-    return canvas
+    sep_rows = p.get('sep_rows')
+    sep_cols = p.get('sep_cols')
+    result = panel_boolean_combine(inp, op_name, color, sep_rows=sep_rows, sep_cols=sep_cols)
+    return result if result is not None else inp
 
 
 def _step_to_ast(step: SearchStep) -> ASTNode:
@@ -458,8 +439,14 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.PANEL_MAJORITY_SELECT, [ASTNode(Op.INPUT)])
     if action == 'panel_repair':
         return ASTNode(Op.PANEL_REPAIR, [ASTNode(Op.INPUT)])
-    if action == 'object_summary_column':
-        return ASTNode(Op.OBJECT_SUMMARY_COLUMN, [ASTNode(Op.INPUT)])
+    if action == 'panel_boolean':
+        return ASTNode(Op.PANEL_BOOLEAN, [ASTNode(Op.INPUT)],
+                       param=(p.get('op', 'xor'), p.get('color', 0),
+                              p.get('sep_rows'), p.get('sep_cols')))
+    if action == 'symmetry_repair':
+        return ASTNode(Op.SYMMETRY_REPAIR, [ASTNode(Op.INPUT)], param=p.get('damage_color', 0))
+    if action == 'object_repack':
+        return ASTNode(Op.OBJECT_REPACK, [ASTNode(Op.INPUT)], param=p)
 
     # Fallback
     return ASTNode(Op.HOLE, param=f'unknown:{action}')

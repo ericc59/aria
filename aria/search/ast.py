@@ -65,9 +65,13 @@ class Op(Enum):
     PANEL_ODD_SELECT = auto()   # Grid → Grid (select odd-one-out from each panel band)
     PANEL_MAJORITY_SELECT = auto()  # Grid → Grid
     PANEL_REPAIR = auto()       # Grid → Grid (repair periodic patterns in each panel)
+    PANEL_BOOLEAN = auto()      # Grid → Grid (boolean combine aligned panels) param: (op, color)
 
-    # Summary / structured output
-    OBJECT_SUMMARY_COLUMN = auto()  # Grid → Grid (1-wide column: each obj's color × size)
+    # Repair
+    SYMMETRY_REPAIR = auto()        # Grid → Grid (repair damage color using grid symmetry) param: damage_color
+
+    # Object repacking / structured output
+    OBJECT_REPACK = auto()          # Grid → Grid  param: {ordering, layout, payload}
 
     # Object-level actions
     RECOLOR = auto()        # param: (selector_preds, new_color)

@@ -147,6 +147,20 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
             return None
         return panel_majority_select(grid)
 
+    if op == Op.PANEL_BOOLEAN:
+        from aria.search.panel_ops import panel_boolean_combine
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        param = node.param or {}
+        if isinstance(param, tuple) and len(param) >= 2:
+            op_name, color = param[0], param[1]
+            sep_rows = param[2] if len(param) > 2 else None
+            sep_cols = param[3] if len(param) > 3 else None
+        else:
+            op_name, color, sep_rows, sep_cols = 'xor', 0, None, None
+        return panel_boolean_combine(grid, op_name, color, sep_rows=sep_rows, sep_cols=sep_cols)
+
     if op == Op.PANEL_REPAIR:
         from aria.search.panel_ops import panel_periodic_repair
         grid = _child(node, 0, inp, ctx)
@@ -155,12 +169,21 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         result = panel_periodic_repair(grid)
         return result if result is not None else grid
 
-    # --- Summary / structured output ---
-    if op == Op.OBJECT_SUMMARY_COLUMN:
+    # --- Repair ---
+    if op == Op.SYMMETRY_REPAIR:
         grid = _child(node, 0, inp, ctx)
         if grid is None:
             return None
-        return _exec_object_summary_column(grid)
+        damage_color = node.param
+        return _exec_symmetry_repair(grid, damage_color)
+
+    # --- Object repacking ---
+    if op == Op.OBJECT_REPACK:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_object_repack(grid, params)
 
     # --- Object-level actions ---
     if op == Op.RECOLOR:
@@ -215,26 +238,52 @@ def _child(node, idx, inp, ctx):
     return None
 
 
-def _exec_object_summary_column(grid):
-    """Render a 1-wide column: each object's color repeated by its pixel count.
+def _exec_object_repack(grid, params):
+    """Repack objects into a new layout.
 
-    Objects are ordered by spatial chain traversal: start from the topmost-leftmost,
-    follow adjacency to form a connected path.
+    params:
+        ordering: 'chain' (spatial adjacency), 'spatial' (top-left to bottom-right), 'size' (largest first)
+        layout: 'column' (vertical stack), 'row' (horizontal stack)
+        payload: 'color_by_area' (color repeated by pixel count), 'bbox' (crop of each object)
     """
     from aria.guided.perceive import perceive
     facts = perceive(grid)
     if not facts.objects:
         return None
 
-    objs = list(facts.objects)
-    ordered = _chain_order_objects(objs)
+    ordering = params.get('ordering', 'chain')
+    layout = params.get('layout', 'column')
+    payload = params.get('payload', 'color_by_area')
 
-    cells = []
-    for obj in ordered:
-        cells.extend([obj.color] * obj.size)
-    if not cells:
+    # Order objects
+    if ordering == 'chain':
+        ordered = _chain_order_objects(list(facts.objects))
+    elif ordering == 'spatial':
+        ordered = sorted(facts.objects, key=lambda o: (o.row, o.col))
+    elif ordering == 'size':
+        ordered = sorted(facts.objects, key=lambda o: -o.size)
+    else:
+        ordered = list(facts.objects)
+
+    if not ordered:
         return None
-    return np.array(cells, dtype=grid.dtype).reshape(-1, 1)
+
+    # Build payload per object
+    if payload == 'color_by_area':
+        segments = [np.full((obj.size, 1), obj.color, dtype=grid.dtype) for obj in ordered]
+    elif payload == 'bbox':
+        from aria.guided.dsl import prim_crop_bbox
+        segments = [prim_crop_bbox(grid, obj) for obj in ordered]
+    else:
+        return None
+
+    # Layout
+    if layout == 'column':
+        return np.vstack(segments)
+    elif layout == 'row':
+        return np.hstack(segments)
+
+    return None
 
 
 def _chain_order_objects(objs):
@@ -247,14 +296,11 @@ def _chain_order_objects(objs):
     remaining.remove(current)
 
     while remaining:
-        cur = objs[ordered[-1].oid if hasattr(ordered[-1], 'oid') else 0]
-        # Use the last ordered object's position
         cur = ordered[-1]
         best = None
         best_dist = 9999
         for j in remaining:
             o = objs[j]
-            # Manhattan distance between bbox edges
             dr = max(0, max(cur.row, o.row) - min(cur.row + cur.height, o.row + o.height))
             dc = max(0, max(cur.col, o.col) - min(cur.col + cur.width, o.col + o.width))
             dist = dr + dc
@@ -266,6 +312,43 @@ def _chain_order_objects(objs):
             remaining.remove(best)
 
     return ordered
+
+
+def _exec_symmetry_repair(grid, damage_color):
+    """Repair cells of damage_color using the grid's symmetry.
+
+    For each damaged cell, copy from the closest undamaged symmetric position.
+    Tries all D4 symmetry positions (flips + rotations).
+    """
+    h, w = grid.shape
+    damage = (grid == damage_color)
+    result = grid.copy()
+
+    # All D4 symmetric positions for (r, c) in an h×w grid
+    def sym_positions(r, c):
+        positions = [
+            (r, w - 1 - c),       # flip horizontal
+            (h - 1 - r, c),       # flip vertical
+            (h - 1 - r, w - 1 - c),  # flip both
+        ]
+        if h == w:
+            positions.extend([
+                (c, r),               # transpose
+                (w - 1 - c, r),       # rot90
+                (c, h - 1 - r),       # rot270
+                (w - 1 - c, h - 1 - r),  # transpose + flip
+            ])
+        return positions
+
+    for r in range(h):
+        for c in range(w):
+            if damage[r, c]:
+                for mr, mc in sym_positions(r, c):
+                    if 0 <= mr < h and 0 <= mc < w and not damage[mr, mc]:
+                        result[r, c] = grid[mr, mc]
+                        break
+
+    return result
 
 
 def _exec_recolor(node, inp, ctx):
