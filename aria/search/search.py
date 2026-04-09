@@ -61,6 +61,14 @@ def search_programs(
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc)
 
+    # Phase 0e: Binding-guided decode (uses role/relation substrate)
+    from aria.search.binding_derive import derive_from_binding
+    binding_progs = derive_from_binding(demos)
+    for prog in binding_progs:
+        ast = prog.to_ast()
+        desc = f"search: {prog.provenance} [{prog.signature}]"
+        return ASTProgram(ast, desc)
+
     registry = build_seed_registry()
 
     # Phase 1: single-step schemas

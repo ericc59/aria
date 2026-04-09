@@ -195,6 +195,22 @@ class SearchProgram:
                 result = _exec_panel_boolean(result, step)
             elif step.action == 'marker_stamp':
                 result = _exec_marker_stamp(result, step)
+            elif step.action == 'quadrant_template_decode':
+                result = _exec_quadrant_template_decode(result, step)
+            elif step.action == 'frame_bbox_pack':
+                result = _exec_frame_bbox_pack(result, step)
+            elif step.action == 'cross_stencil_recolor':
+                from aria.search.executor import _exec_cross_stencil_recolor
+                result = _exec_cross_stencil_recolor(result, step.params or {})
+            elif step.action == 'legend_frame_fill':
+                result = _exec_legend_frame_fill(result, step)
+            elif step.action == 'anomaly_halo':
+                from aria.search.executor import _exec_anomaly_halo
+                result = _exec_anomaly_halo(result, step.params or {})
+            elif step.action == 'cavity_transfer':
+                # Experimental — not canonical, kept for search-time derivation only
+                from aria.search.executor import _exec_cavity_transfer_auto
+                result = _exec_cavity_transfer_auto(result)
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()
@@ -448,5 +464,154 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     if action == 'object_repack':
         return ASTNode(Op.OBJECT_REPACK, [ASTNode(Op.INPUT)], param=p)
 
+    if action == 'quadrant_template_decode':
+        return ASTNode(Op.QUADRANT_TEMPLATE_DECODE, [ASTNode(Op.INPUT)], param=p)
+    if action == 'frame_bbox_pack':
+        return ASTNode(Op.FRAME_BBOX_PACK, [ASTNode(Op.INPUT)], param=p)
+    if action == 'cross_stencil_recolor':
+        return ASTNode(Op.CROSS_STENCIL_RECOLOR, [ASTNode(Op.INPUT)], param=p)
+    if action == 'legend_frame_fill':
+        return ASTNode(Op.LEGEND_FRAME_FILL, [ASTNode(Op.INPUT)], param=p)
+    if action == 'anomaly_halo':
+        return ASTNode(Op.ANOMALY_HALO, [ASTNode(Op.INPUT)], param=p)
+    if action == 'cavity_transfer':
+        return ASTNode(Op.CAVITY_TRANSFER, [ASTNode(Op.INPUT)], param=p)
+
     # Fallback
     return ASTNode(Op.HOLE, param=f'unknown:{action}')
+
+
+def _exec_quadrant_template_decode(inp, step):
+    """Execute quadrant template decode at search time."""
+    from aria.guided.perceive import perceive
+    from aria.search.decode import (
+        _extract_quadrant_pattern, _apply_quadrant_template,
+    )
+
+    facts = perceive(inp)
+    bg = facts.bg
+    tmpl_idx = step.params.get('template_quadrant', 0)
+    seed_color = step.params.get('seed_color')
+
+    row_seps = sorted([s for s in facts.separators if s.axis == 'row'], key=lambda s: s.index)
+    col_seps = sorted([s for s in facts.separators if s.axis == 'col'], key=lambda s: s.index)
+    if len(row_seps) != 1 or len(col_seps) != 1:
+        return inp
+
+    rs, cs = row_seps[0].index, col_seps[0].index
+    h, w = inp.shape
+
+    quads_rc = [(0, rs, 0, cs), (0, rs, cs + 1, w), (rs + 1, h, 0, cs), (rs + 1, h, cs + 1, w)]
+    quads = [inp[r0:r1, c0:c1] for r0, r1, c0, c1 in quads_rc]
+
+    tmpl = quads[tmpl_idx]
+    tmpl_pattern = _extract_quadrant_pattern(tmpl, bg, seed_color)
+    if tmpl_pattern is None:
+        return inp
+
+    pat_colors, pat_bbox, pat_relative = tmpl_pattern
+    central_color = seed_color if seed_color is not None else pat_colors.get('center')
+    if central_color is None:
+        return inp
+
+    result = inp.copy()
+    tmpl_row = 0 if tmpl_idx < 2 else 1
+    tmpl_col = tmpl_idx % 2
+
+    for qi in range(4):
+        if qi == tmpl_idx:
+            continue
+        q = quads[qi]
+        seed_cells = [(r, c) for r in range(q.shape[0]) for c in range(q.shape[1])
+                       if q[r, c] == central_color]
+        if not seed_cells:
+            continue
+
+        qi_row = 0 if qi < 2 else 1
+        qi_col = qi % 2
+        flip_v = (qi_row != tmpl_row)
+        flip_h = (qi_col != tmpl_col)
+
+        applied = _apply_quadrant_template(q, pat_relative, seed_cells,
+                                            central_color, bg, flip_h, flip_v)
+        if applied is not None:
+            r0, r1, c0, c1 = quads_rc[qi]
+            result[r0:r1, c0:c1] = applied
+
+    return result
+
+
+def _exec_legend_frame_fill(inp, step):
+    """Execute legend-driven frame fill at search time."""
+    from aria.search.executor import _exec_legend_frame_fill
+    return _exec_legend_frame_fill(inp, step.params or {})
+
+
+def _exec_frame_bbox_pack(inp, step):
+    """Execute frame-bbox pack at search time."""
+    return _do_frame_bbox_pack(inp, step.params or {})
+
+
+def _do_frame_bbox_pack(inp, params):
+    """Shared frame-bbox pack logic for both SearchProgram and AST execution."""
+    from aria.guided.perceive import perceive
+    from aria.guided.dsl import prim_find_frame, prim_crop_bbox
+
+    facts = perceive(inp)
+    bg = facts.bg
+    ordering = params.get('ordering', 'row')
+    bh = params.get('block_h')
+    bw = params.get('block_w')
+    nc = params.get('grid_cols')  # number of columns in output grid
+
+    if not bh or not bw or not nc:
+        return inp
+
+    frame_infos = []
+    for obj in facts.objects:
+        frame = prim_find_frame(obj, inp)
+        if frame:
+            bbox = prim_crop_bbox(inp, obj)
+            if bbox.shape != (bh, bw):
+                continue
+            if bbox.shape[0] > 2 and bbox.shape[1] > 2:
+                interior_bg = np.all(bbox[1:-1, 1:-1] == bg)
+            else:
+                interior_bg = True
+            frame_infos.append({
+                'bbox': bbox, 'color': obj.color,
+                'row': obj.row, 'col': obj.col,
+                'interior_bg': interior_bg,
+            })
+
+    if not frame_infos:
+        return inp
+
+    if ordering == 'row':
+        ordered = sorted(frame_infos, key=lambda f: (f['row'], f['col']))
+    elif ordering == 'col':
+        ordered = sorted(frame_infos, key=lambda f: (f['col'], f['row']))
+    elif ordering == 'color':
+        ordered = sorted(frame_infos, key=lambda f: f['color'])
+    elif ordering == 'group_cols':
+        empty = sorted([f for f in frame_infos if f['interior_bg']], key=lambda f: (f['row'], f['col']))
+        filled = sorted([f for f in frame_infos if not f['interior_bg']], key=lambda f: (f['row'], f['col']))
+        ordered = []
+        for i in range(max(len(empty), len(filled))):
+            ordered.append(empty[i] if i < len(empty) else None)
+            ordered.append(filled[i] if i < len(filled) else None)
+    else:
+        ordered = frame_infos
+
+    # Compute grid rows from frame count and column count
+    n_slots = len(ordered)
+    nr = (n_slots + nc - 1) // nc  # ceil division
+    oh, ow = nr * bh, nc * bw
+    result = np.full((oh, ow), bg, dtype=inp.dtype)
+    for idx in range(nr * nc):
+        rb = idx // nc
+        cb = idx % nc
+        if idx < len(ordered) and ordered[idx] is not None:
+            result[rb * bh:(rb + 1) * bh, cb * bw:(cb + 1) * bw] = ordered[idx]['bbox']
+
+    return result

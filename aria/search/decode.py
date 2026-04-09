@@ -63,6 +63,10 @@ def derive_region_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[S
     progs = _try_cellwise_conditional(demos, all_facts)
     results.extend(progs)
 
+    # Strategy 6: Quadrant template decode (one quadrant is template, others mirror-apply)
+    progs = _try_quadrant_template_decode(demos, all_facts)
+    results.extend(progs)
+
     return results
 
 
@@ -453,3 +457,344 @@ def _make_region_select_prog(region_name, xform, demos):
     if prog.verify(demos):
         return prog
     return None
+
+
+# ---------------------------------------------------------------------------
+# Strategy 6: Quadrant template decode
+# ---------------------------------------------------------------------------
+
+def _try_quadrant_template_decode(demos, all_facts):
+    """One quadrant defines a spatial color template; others apply it mirrored.
+
+    Requires exactly one row separator and one col separator creating 4 quadrants.
+    One quadrant is the template (has the most complex pattern). Each other quadrant
+    has a "seed" block of the template's central color. The template is mirrored
+    (h for left/right, v for top/bottom, hv for diagonal) and applied to each seed,
+    scaled by the seed's size.
+    """
+    results = []
+
+    facts0 = all_facts[0]
+    inp0, out0 = demos[0]
+    bg = facts0.bg
+
+    row_seps = sorted([s for s in facts0.separators if s.axis == 'row'], key=lambda s: s.index)
+    col_seps = sorted([s for s in facts0.separators if s.axis == 'col'], key=lambda s: s.index)
+
+    if len(row_seps) != 1 or len(col_seps) != 1:
+        return []
+    if inp0.shape != out0.shape:
+        return []
+
+    rs, cs = row_seps[0].index, col_seps[0].index
+    h, w = inp0.shape
+
+    # Extract 4 quadrants
+    quads_rc = [(0, rs, 0, cs), (0, rs, cs + 1, w), (rs + 1, h, 0, cs), (rs + 1, h, cs + 1, w)]
+    quads = [inp0[r0:r1, c0:c1] for r0, r1, c0, c1 in quads_rc]
+    out_quads = [out0[r0:r1, c0:c1] for r0, r1, c0, c1 in quads_rc]
+
+    # Require all same shape
+    shapes = [q.shape for q in quads]
+    if len(set(shapes)) != 1:
+        return []
+
+    qh, qw = shapes[0]
+
+    # Find seed color: the non-bg color present in ALL 4 quadrants
+    quad_colors = []
+    for q in quads:
+        colors = set(int(q[r, c]) for r in range(qh) for c in range(qw) if q[r, c] != bg)
+        quad_colors.append(colors)
+
+    common_colors = quad_colors[0]
+    for cs_set in quad_colors[1:]:
+        common_colors = common_colors & cs_set
+    if not common_colors:
+        return []
+
+    # Find template quadrant: most distinct non-bg colors, and unchanged in output
+    quad_complexity = []
+    for i, q in enumerate(quads):
+        quad_complexity.append((len(quad_colors[i]), i))
+    quad_complexity.sort(reverse=True)
+
+    for seed_color in common_colors:
+        for _, tmpl_idx in quad_complexity:
+            tmpl = quads[tmpl_idx]
+            tmpl_colors = quad_colors[tmpl_idx]
+            if len(tmpl_colors) < 2:
+                continue
+
+            # Template quadrant should be unchanged in output
+            if not np.array_equal(tmpl, out_quads[tmpl_idx]):
+                continue
+
+            # Extract template pattern with known seed color
+            tmpl_pattern = _extract_quadrant_pattern(tmpl, bg, seed_color)
+            if tmpl_pattern is None:
+                continue
+
+            pat_colors, pat_bbox, pat_relative = tmpl_pattern
+            central_color = seed_color
+
+            # Try applying template to each other quadrant
+            result = inp0.copy()
+            all_ok = True
+
+            for qi in range(4):
+                if qi == tmpl_idx:
+                    continue
+
+                q = quads[qi]
+                out_q = out_quads[qi]
+
+                # Find seed block of central_color in this quadrant
+                seed_cells = [(r, c) for r in range(qh) for c in range(qw) if q[r, c] == central_color]
+                if not seed_cells:
+                    all_ok = False
+                    break
+
+                # Determine mirror based on quadrant position relative to template
+                tmpl_row = 0 if tmpl_idx < 2 else 1
+                tmpl_col = tmpl_idx % 2
+                qi_row = 0 if qi < 2 else 1
+                qi_col = qi % 2
+                flip_v = (qi_row != tmpl_row)
+                flip_h = (qi_col != tmpl_col)
+
+                # Apply mirrored template to seed
+                applied = _apply_quadrant_template(q, pat_relative, seed_cells,
+                                                    central_color, bg, flip_h, flip_v)
+                if applied is None or not np.array_equal(applied, out_q):
+                    all_ok = False
+                    break
+
+                # Write into result
+                r0, r1, c0, c1 = quads_rc[qi]
+                result[r0:r1, c0:c1] = applied
+
+            if all_ok and np.array_equal(result, out0):
+                # Verify on all demos
+                verified = _verify_quadrant_template(demos, all_facts, tmpl_idx, seed_color)
+                if verified:
+                    prog = SearchProgram(
+                        steps=[SearchStep('quadrant_template_decode',
+                                           {'template_quadrant': tmpl_idx,
+                                            'seed_color': seed_color})],
+                        provenance=f'decode:quadrant_template_q{tmpl_idx}',
+                    )
+                    results.append(prog)
+                    return results
+
+    return results
+
+
+def _extract_quadrant_pattern(tmpl, bg, seed_color=None):
+    """Extract the spatial color pattern from a template quadrant.
+
+    If seed_color is given, use it as the center. Otherwise heuristic.
+    Returns dict with color roles and relative positions, or None.
+    """
+    h, w = tmpl.shape
+
+    # Find non-bg bounding box
+    non_bg = [(r, c, int(tmpl[r, c])) for r in range(h) for c in range(w) if tmpl[r, c] != bg]
+    if len(non_bg) < 2:
+        return None
+
+    colors = set(v for _, _, v in non_bg)
+    if len(colors) < 2:
+        return None
+
+    # Find contiguous color blocks
+    from collections import defaultdict
+    color_cells = defaultdict(list)
+    for r, c, v in non_bg:
+        color_cells[v].append((r, c))
+
+    if seed_color is not None and seed_color in colors:
+        best_center = seed_color
+    else:
+        # Heuristic: the color whose bounding box center is closest to the pattern center
+        pattern_rows = [r for r, _, _ in non_bg]
+        pattern_cols = [c for _, c, _ in non_bg]
+        pr0, pr1 = min(pattern_rows), max(pattern_rows)
+        pc0, pc1 = min(pattern_cols), max(pattern_cols)
+        pat_center_r = (pr0 + pr1) / 2
+        pat_center_c = (pc0 + pc1) / 2
+
+        best_center = None
+        best_score = 999
+        for color in colors:
+            cells = color_cells[color]
+            cr = sum(r for r, c in cells) / len(cells)
+            cc = sum(c for r, c in cells) / len(cells)
+            dist = abs(cr - pat_center_r) + abs(cc - pat_center_c)
+            if dist < best_score:
+                best_score = dist
+                best_center = color
+
+    if best_center is None:
+        return None
+
+    pattern_rows = [r for r, _, _ in non_bg]
+    pattern_cols = [c for _, c, _ in non_bg]
+    pr0, pr1 = min(pattern_rows), max(pattern_rows)
+    pc0, pc1 = min(pattern_cols), max(pattern_cols)
+
+    center_cells = color_cells[best_center]
+    center_r0 = min(r for r, c in center_cells)
+    center_c0 = min(c for r, c in center_cells)
+    center_r1 = max(r for r, c in center_cells)
+    center_c1 = max(c for r, c in center_cells)
+    center_h = center_r1 - center_r0 + 1
+    center_w = center_c1 - center_c0 + 1
+
+    # Center must form a filled rectangle (no multi-island merge)
+    if len(center_cells) != center_h * center_w:
+        return None
+
+    # Build relative pattern: for each non-center color block, record
+    # offset relative to center block (in units of center block size)
+    relative = []
+    for color in colors:
+        if color == best_center:
+            continue
+        cells = color_cells[color]
+        block_r0 = min(r for r, c in cells)
+        block_c0 = min(c for r, c in cells)
+        block_r1 = max(r for r, c in cells)
+        block_c1 = max(c for r, c in cells)
+        block_h = block_r1 - block_r0 + 1
+        block_w = block_c1 - block_c0 + 1
+
+        # Verify cells form a filled rectangle (no multi-island merge corruption)
+        if len(cells) != block_h * block_w:
+            return None
+
+        # Offset in units of center block size
+        dr = (block_r0 - center_r0) / center_h if center_h > 0 else 0
+        dc = (block_c0 - center_c0) / center_w if center_w > 0 else 0
+
+        relative.append({
+            'color': color,
+            'dr': dr,
+            'dc': dc,
+            'h_ratio': block_h / center_h if center_h > 0 else 1,
+            'w_ratio': block_w / center_w if center_w > 0 else 1,
+        })
+
+    return {'center': best_center}, (pr0, pr1, pc0, pc1), relative
+
+
+def _apply_quadrant_template(quad, pat_relative, seed_cells, central_color, bg, flip_h, flip_v):
+    """Apply a mirrored template to a quadrant's seed block."""
+    qh, qw = quad.shape
+    result = quad.copy()
+
+    # Find seed bounding box
+    sr0 = min(r for r, c in seed_cells)
+    sc0 = min(c for r, c in seed_cells)
+    sr1 = max(r for r, c in seed_cells)
+    sc1 = max(c for r, c in seed_cells)
+    seed_h = sr1 - sr0 + 1
+    seed_w = sc1 - sc0 + 1
+
+    for block in pat_relative:
+        dr = block['dr']
+        dc = block['dc']
+        color = block['color']
+        h_ratio = block['h_ratio']
+        w_ratio = block['w_ratio']
+
+        # Mirror offsets
+        if flip_v:
+            dr = -dr - h_ratio + 1  # flip vertical offset
+        if flip_h:
+            dc = -dc - w_ratio + 1  # flip horizontal offset
+
+        # Compute block position in seed coordinates
+        br0 = sr0 + int(round(dr * seed_h))
+        bc0 = sc0 + int(round(dc * seed_w))
+        bh = max(1, int(round(h_ratio * seed_h)))
+        bw = max(1, int(round(w_ratio * seed_w)))
+
+        # Fill the block
+        for r in range(bh):
+            for c in range(bw):
+                pr, pc = br0 + r, bc0 + c
+                if 0 <= pr < qh and 0 <= pc < qw:
+                    result[pr, pc] = color
+
+    return result
+
+
+def _verify_quadrant_template(demos, all_facts, tmpl_idx, seed_color=None):
+    """Verify quadrant template decode across all demos."""
+    for i, (inp, out) in enumerate(demos):
+        facts = all_facts[i]
+        bg = facts.bg
+
+        row_seps = sorted([s for s in facts.separators if s.axis == 'row'], key=lambda s: s.index)
+        col_seps = sorted([s for s in facts.separators if s.axis == 'col'], key=lambda s: s.index)
+        if len(row_seps) != 1 or len(col_seps) != 1:
+            return False
+        if inp.shape != out.shape:
+            return False
+
+        rs, cs = row_seps[0].index, col_seps[0].index
+        h, w = inp.shape
+
+        quads_rc = [(0, rs, 0, cs), (0, rs, cs + 1, w), (rs + 1, h, 0, cs), (rs + 1, h, cs + 1, w)]
+        quads = [inp[r0:r1, c0:c1] for r0, r1, c0, c1 in quads_rc]
+        out_quads = [out[r0:r1, c0:c1] for r0, r1, c0, c1 in quads_rc]
+
+        shapes = [q.shape for q in quads]
+        if len(set(shapes)) != 1:
+            return False
+
+        tmpl = quads[tmpl_idx]
+        if not np.array_equal(tmpl, out_quads[tmpl_idx]):
+            return False
+
+        tmpl_pattern = _extract_quadrant_pattern(tmpl, bg, seed_color)
+        if tmpl_pattern is None:
+            return False
+
+        pat_colors, pat_bbox, pat_relative = tmpl_pattern
+        central_color = seed_color if seed_color is not None else pat_colors.get('center')
+        if central_color is None:
+            return False
+
+        result = inp.copy()
+        tmpl_row = 0 if tmpl_idx < 2 else 1
+        tmpl_col = tmpl_idx % 2
+
+        for qi in range(4):
+            if qi == tmpl_idx:
+                continue
+
+            q = quads[qi]
+            out_q = out_quads[qi]
+            seed_cells = [(r, c) for r in range(q.shape[0]) for c in range(q.shape[1]) if q[r, c] == central_color]
+            if not seed_cells:
+                return False
+
+            qi_row = 0 if qi < 2 else 1
+            qi_col = qi % 2
+            flip_v = (qi_row != tmpl_row)
+            flip_h = (qi_col != tmpl_col)
+
+            applied = _apply_quadrant_template(q, pat_relative, seed_cells,
+                                                central_color, bg, flip_h, flip_v)
+            if applied is None or not np.array_equal(applied, out_q):
+                return False
+
+            r0, r1, c0, c1 = quads_rc[qi]
+            result[r0:r1, c0:c1] = applied
+
+        if not np.array_equal(result, out):
+            return False
+
+    return True

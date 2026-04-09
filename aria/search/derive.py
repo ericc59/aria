@@ -31,12 +31,33 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     from aria.guided.perceive import perceive
     from aria.guided.synthesize import compute_transitions
 
-    # Shape-independent strategies first
+    # Shape-independent canonical strategies first
     progs = _derive_object_repack(demos)
     if progs:
         return progs
 
     progs = _derive_symmetry_repair(demos)
+    if progs:
+        return progs
+
+    # Newer structural strategies (after canonical ones)
+    progs = _derive_cross_stencil_recolor(demos)
+    if progs:
+        return progs
+
+    progs = _derive_frame_bbox_pack(demos)
+    if progs:
+        return progs
+
+    progs = _derive_anomaly_halo(demos)
+    if progs:
+        return progs
+
+    progs = _derive_cavity_transfer(demos)
+    if progs:
+        return progs
+
+    progs = _derive_legend_frame_fill(demos)
     if progs:
         return progs
 
@@ -745,6 +766,579 @@ def _derive_symmetry_repair(demos):
         if prog.verify(demos):
             results.append(prog)
             return results
+
+    return results
+
+
+def _derive_anomaly_halo(demos):
+    """Detect isolated anomaly cells and decorate with a halo color.
+
+    Pattern: grid has two dominant colors forming bands/regions.
+    Isolated cells of the wrong color in each region are anomalies.
+    In one region, anomalies get a halo of a new color around them.
+    In the other region, anomalies are simply removed (filled with region color).
+    """
+    from aria.guided.perceive import perceive
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    inp0, out0 = demos[0]
+    facts0 = perceive(inp0)
+    bg = facts0.bg
+    h, w = inp0.shape
+
+    # Need exactly 2 dominant colors + 1 halo color in the output
+    from collections import Counter
+    in_counts = Counter(int(inp0[r, c]) for r in range(h) for c in range(w))
+    out_counts = Counter(int(out0[r, c]) for r in range(h) for c in range(w))
+
+    # Find the two dominant colors
+    top2 = in_counts.most_common(2)
+    if len(top2) < 2:
+        return []
+    c1, c2 = top2[0][0], top2[1][0]
+
+    # Find the halo color (appears in output but not/barely in input)
+    halo_color = None
+    for color in out_counts:
+        if color not in in_counts or in_counts[color] == 0:
+            halo_color = color
+            break
+        if in_counts[color] < 5 and out_counts[color] > in_counts[color] * 3:
+            halo_color = color
+            break
+
+    if halo_color is None:
+        return []
+
+    # Try the anomaly-halo rule:
+    # For each cell of c2 in a "c1-region" → anomaly: halo its 8-neighbors with halo_color
+    # For each cell of c1 in a "c2-region" → noise: remove (set to c2)
+    # A cell's "region" is determined by the majority of its wider neighborhood
+
+    # Simple approach: anomaly = cell differs from the majority of its 8-neighbors
+    # For c2-anomalies in c1-region: add halo
+    # For c1-anomalies in c2-region: remove
+
+    candidate = inp0.copy()
+    anomalies_c2_in_c1 = []  # c2 cells surrounded by c1
+    anomalies_c1_in_c2 = []  # c1 cells surrounded by c2
+
+    for r in range(h):
+        for c in range(w):
+            v = int(inp0[r, c])
+            if v != c1 and v != c2:
+                continue
+            # Count neighbors
+            n1 = 0
+            n2 = 0
+            for dr in [-1, 0, 1]:
+                for dc in [-1, 0, 1]:
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        nv = int(inp0[nr, nc])
+                        if nv == c1:
+                            n1 += 1
+                        elif nv == c2:
+                            n2 += 1
+
+            if v == c2 and n1 > n2:  # c2-cell in c1-region
+                anomalies_c2_in_c1.append((r, c))
+            elif v == c1 and n2 > n1:  # c1-cell in c2-region
+                anomalies_c1_in_c2.append((r, c))
+
+    if not anomalies_c2_in_c1 and not anomalies_c1_in_c2:
+        return []
+
+    # Apply: remove c1-in-c2 noise
+    for r, c in anomalies_c1_in_c2:
+        candidate[r, c] = c2
+
+    # Apply: halo around c2-in-c1 anomalies (all neighbors except other anomalies)
+    anomaly_set_minor = set(anomalies_c2_in_c1)
+    for r, c in anomalies_c2_in_c1:
+        for dr in [-1, 0, 1]:
+            for dc in [-1, 0, 1]:
+                if dr == 0 and dc == 0:
+                    continue
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in anomaly_set_minor:
+                    candidate[nr, nc] = halo_color
+
+    # Verify ALL demos (including demo 0) using the actual executor
+    from aria.search.executor import _exec_anomaly_halo
+    params = {'c1': c1, 'c2': c2, 'halo_color': halo_color}
+    for inp, out in demos:
+        cand = _exec_anomaly_halo(inp, params)
+        if not np.array_equal(cand, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('anomaly_halo', params)],
+        provenance=f'derive:anomaly_halo_{c2}in{c1}_h{halo_color}',
+    )
+    return [prog]
+
+
+def _derive_cavity_transfer(demos):
+    """Transfer marker cells from inside a concave host to the opposite open end.
+
+    Pattern: a concave host shape has marker cells inside its cavity. The output
+    removes the markers and places them on the exterior, projected through the
+    host's opening. The number of new cells = number of unique rows (vertical
+    opening) or cols (horizontal opening) of the original markers. All new cells
+    align at the opening's tip coordinate.
+    """
+    from aria.guided.perceive import perceive
+    from collections import defaultdict
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    results = []
+
+    # Analyze demo 0 to find host-marker pairs and opening direction
+    inp0, out0 = demos[0]
+    facts0 = perceive(inp0)
+    bg = facts0.bg
+    h, w = inp0.shape
+
+    color_cells = defaultdict(set)
+    for r in range(h):
+        for c in range(w):
+            if inp0[r, c] != bg:
+                color_cells[int(inp0[r, c])].add((r, c))
+
+    # Find ALL host-marker pairs with their directions
+    pairs = []  # list of (marker_color, host_color, direction)
+    for marker_color in list(color_cells):
+        mc_in = color_cells[marker_color]
+        mc_out = set((r, c) for r in range(h) for c in range(w) if out0[r, c] == marker_color)
+        removed = mc_in - mc_out
+        added = mc_out - mc_in
+        if not removed or not added:
+            continue
+
+        for host_color in list(color_cells):
+            if host_color == marker_color:
+                continue
+            host = color_cells[host_color]
+            if len(host) < 4:
+                continue
+
+            hr = [r for r, c in host]
+            hc = [c for r, c in host]
+            top, bot = min(hr), max(hr)
+            left, right = min(hc), max(hc)
+
+            inside = [(r, c) for r, c in removed
+                      if top <= r <= bot and left <= c <= right]
+            if not inside:
+                continue
+
+            for direction in ['up', 'down', 'left', 'right']:
+                if direction == 'up':
+                    top_cells = sorted([(r, c) for r, c in host if r == top])
+                    if not top_cells:
+                        continue
+                    tip_col = top_cells[0][1]
+                    n_unique = len(set(r for r, c in inside))
+                    expected_new = set((top - 1 - i, tip_col) for i in range(n_unique))
+                elif direction == 'down':
+                    bot_cells = sorted([(r, c) for r, c in host if r == bot])
+                    if not bot_cells:
+                        continue
+                    tip_col = bot_cells[0][1]
+                    n_unique = len(set(r for r, c in inside))
+                    expected_new = set((bot + 1 + i, tip_col) for i in range(n_unique))
+                elif direction == 'right':
+                    tip_row = max(r for r, c in host if c == right)
+                    n_unique = len(set(c for r, c in inside))
+                    expected_new = set((tip_row, right + 1 + i) for i in range(n_unique))
+                elif direction == 'left':
+                    tip_row = max(r for r, c in host if c == left)
+                    n_unique = len(set(c for r, c in inside))
+                    expected_new = set((tip_row, left - 1 - i) for i in range(n_unique))
+
+                if expected_new and expected_new <= added:
+                    pairs.append((marker_color, host_color, direction, expected_new))
+                    break  # found direction for this marker/host pair
+
+    if not pairs:
+        return []
+
+    # Demo 0 has specific color pairs. Verify using color-agnostic execution on ALL demos.
+    from aria.search.executor import _exec_cavity_transfer_auto
+
+    for i, (inp, out) in enumerate(demos):
+        result = _exec_cavity_transfer_auto(inp)
+        if not np.array_equal(result, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('cavity_transfer', {'mode': 'auto'})],
+        provenance='derive:cavity_transfer_auto',
+    )
+    return [prog]
+
+
+def _derive_legend_frame_fill(demos):
+    """Fill bg cells enclosed by colored boundaries.
+
+    For each non-bg color, flood-fill bg from the grid border. Any bg cells
+    NOT reached are enclosed by that color's boundary. Fill them with a
+    derived color (from a legend, or the boundary color itself).
+    """
+    from aria.guided.perceive import perceive
+    from collections import deque
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    inp0, out0 = demos[0]
+    facts0 = perceive(inp0)
+    bg = facts0.bg
+    h, w = inp0.shape
+
+    changed = (inp0 != out0)
+    if changed.sum() == 0:
+        return []
+
+    # For each non-bg color, find enclosed bg regions
+    non_bg_colors = set(int(inp0[r, c]) for r in range(h) for c in range(w) if inp0[r, c] != bg)
+
+    def _find_enclosed(grid, wall_colors, bg_val):
+        """Find bg cells not reachable from border through non-wall cells."""
+        gh, gw = grid.shape
+        reachable = np.zeros((gh, gw), dtype=bool)
+        q = deque()
+        # Seed from border bg cells
+        for r in range(gh):
+            for c in [0, gw - 1]:
+                if grid[r, c] == bg_val and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        for c in range(gw):
+            for r in [0, gh - 1]:
+                if grid[r, c] == bg_val and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        while q:
+            r, c = q.popleft()
+            for dr, dc in [(-1,0),(1,0),(0,-1),(0,1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < gh and 0 <= nc < gw and not reachable[nr, nc]:
+                    if grid[nr, nc] == bg_val:
+                        reachable[nr, nc] = True
+                        q.append((nr, nc))
+        # Enclosed = bg but not reachable
+        enclosed = np.zeros((gh, gw), dtype=bool)
+        for r in range(gh):
+            for c in range(gw):
+                if grid[r, c] == bg_val and not reachable[r, c]:
+                    enclosed[r, c] = True
+        return enclosed
+
+    # Try: for each color C, use C as walls, find enclosed bg, fill with derived color
+    # Derive the fill color from what the output shows
+    best_map = None
+    for wall_color in non_bg_colors:
+        # Create a view where wall_color cells are walls
+        wall_grid = np.where(inp0 == wall_color, wall_color, bg)
+        enclosed = _find_enclosed(wall_grid, {wall_color}, bg)
+
+        if enclosed.sum() == 0:
+            continue
+
+        # What color fills the enclosed cells in the output?
+        fill_colors = set(int(out0[r, c]) for r, c in zip(*np.where(enclosed)) if out0[r, c] != bg)
+        if len(fill_colors) != 1:
+            continue
+        fill_color = fill_colors.pop()
+
+        # Record this mapping
+        if best_map is None:
+            best_map = {}
+        best_map[wall_color] = fill_color
+
+    if not best_map:
+        return []
+
+    # Build candidate using all discovered fills
+    candidate = inp0.copy()
+    for wall_color, fill_color in best_map.items():
+        wall_grid = np.where(inp0 == wall_color, wall_color, bg)
+        enclosed = _find_enclosed(wall_grid, {wall_color}, bg)
+        candidate[enclosed] = fill_color
+
+    if not np.array_equal(candidate, out0):
+        return []
+
+    # Verify ALL demos (including demo 0) using the actual executor
+    from aria.search.executor import _exec_legend_frame_fill
+    params = {'strategy': 'enclosed_fill'}
+    for inp, out in demos:
+        cand = _exec_legend_frame_fill(inp, params)
+        if not np.array_equal(cand, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('legend_frame_fill', params)],
+        provenance='derive:legend_enclosed_fill',
+    )
+    return [prog]
+
+
+def _derive_cross_stencil_recolor(demos):
+    """Detect plus/cross patterns and recolor them.
+
+    Scans for cells where all 4 orthogonal neighbors have the same non-bg color.
+    Recolors the 5-cell cross to a new color. Verifies across demos.
+    """
+    from aria.guided.perceive import perceive
+
+    # Need same-shape IO
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    inp0, out0 = demos[0]
+    facts0 = perceive(inp0)
+    bg = facts0.bg
+
+    # Find changed cells in demo 0
+    diff_mask = (inp0 != out0)
+    if diff_mask.sum() == 0:
+        return []
+
+    # All changes must be same old_color → same new_color
+    changed = list(zip(*np.where(diff_mask)))
+    old_colors = set(int(inp0[r, c]) for r, c in changed)
+    new_colors = set(int(out0[r, c]) for r, c in changed)
+    if len(old_colors) != 1 or len(new_colors) != 1:
+        return []
+
+    old_color = old_colors.pop()
+    new_color = new_colors.pop()
+    if old_color == bg or new_color == bg:
+        return []
+
+    # Find cross centers: cells where all 4 orthogonal neighbors = old_color
+    h, w = inp0.shape
+    cross_centers = []
+    for r in range(1, h - 1):
+        for c in range(1, w - 1):
+            if inp0[r, c] != old_color:
+                continue
+            if (inp0[r-1, c] == old_color and inp0[r+1, c] == old_color and
+                inp0[r, c-1] == old_color and inp0[r, c+1] == old_color):
+                cross_centers.append((r, c))
+
+    if not cross_centers:
+        return []
+
+    # Build expected output: recolor all cross cells
+    candidate = inp0.copy()
+    for cr, cc in cross_centers:
+        candidate[cr, cc] = new_color
+        candidate[cr-1, cc] = new_color
+        candidate[cr+1, cc] = new_color
+        candidate[cr, cc-1] = new_color
+        candidate[cr, cc+1] = new_color
+
+    if not np.array_equal(candidate, out0):
+        return []
+
+    # Verify on all demos
+    for inp, out in demos[1:]:
+        facts = perceive(inp)
+        bg_i = facts.bg
+        hi, wi = inp.shape
+
+        # Find cross centers in this demo
+        centers = []
+        for r in range(1, hi - 1):
+            for c in range(1, wi - 1):
+                if inp[r, c] != old_color:
+                    continue
+                if (inp[r-1, c] == old_color and inp[r+1, c] == old_color and
+                    inp[r, c-1] == old_color and inp[r, c+1] == old_color):
+                    centers.append((r, c))
+
+        cand = inp.copy()
+        for cr, cc in centers:
+            cand[cr, cc] = new_color
+            cand[cr-1, cc] = new_color
+            cand[cr+1, cc] = new_color
+            cand[cr, cc-1] = new_color
+            cand[cr, cc+1] = new_color
+
+        if not np.array_equal(cand, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('cross_stencil_recolor',
+                           {'old_color': old_color, 'new_color': new_color})],
+        provenance=f'derive:cross_stencil_recolor_{old_color}to{new_color}',
+    )
+    return [prog]
+
+
+def _derive_frame_bbox_pack(demos):
+    """Derive programs that pack framed-object bboxes into a grid layout.
+
+    Detects framed objects, extracts their bboxes, tries to arrange them
+    into a grid matching the output dimensions.
+    """
+    from aria.guided.perceive import perceive
+    from aria.guided.dsl import prim_find_frame, prim_crop_bbox
+
+    results = []
+
+    # Analyze demo 0
+    inp0, out0 = demos[0]
+    facts0 = perceive(inp0)
+    bg = facts0.bg
+
+    # Find all framed objects
+    frame_infos = []
+    for obj in facts0.objects:
+        frame = prim_find_frame(obj, inp0)
+        if frame:
+            r0, c0, r1, c1 = frame
+            bbox = prim_crop_bbox(inp0, obj)
+            fh, fw = bbox.shape
+            # Check if interior is bg or colored
+            if fh > 2 and fw > 2:
+                interior = bbox[1:-1, 1:-1]
+                interior_is_bg = np.all(interior == bg)
+            else:
+                interior_is_bg = True
+            frame_infos.append({
+                'obj': obj, 'bbox': bbox, 'frame': frame,
+                'color': obj.color, 'row': obj.row, 'col': obj.col,
+                'interior_bg': interior_is_bg,
+            })
+
+    if len(frame_infos) < 2:
+        return []
+
+    # All bboxes must be same shape
+    bbox_shapes = set(f['bbox'].shape for f in frame_infos)
+    if len(bbox_shapes) != 1:
+        return []
+    bh, bw = list(bbox_shapes)[0]
+
+    oh, ow = out0.shape
+    n_frames = len(frame_infos)
+
+    # Compute grid dimensions directly from output shape and block size
+    if oh % bh != 0 or ow % bw != 0:
+        return []
+    nr, nc = oh // bh, ow // bw
+    if nr * nc < n_frames:
+        return []
+    grid_configs = [(nr, nc)]
+
+    # Try orderings: by row, by col, by color, by interior classification
+    orderings = [
+        ('row', lambda fs: sorted(fs, key=lambda f: (f['row'], f['col']))),
+        ('col', lambda fs: sorted(fs, key=lambda f: (f['col'], f['row']))),
+        ('color', lambda fs: sorted(fs, key=lambda f: f['color'])),
+    ]
+
+    # Also try: split into bg-interior and non-bg-interior groups, pack in 2 columns
+    has_groups = any(f['interior_bg'] for f in frame_infos) and any(not f['interior_bg'] for f in frame_infos)
+
+    if has_groups:
+        empty = sorted([f for f in frame_infos if f['interior_bg']], key=lambda f: (f['row'], f['col']))
+        filled = sorted([f for f in frame_infos if not f['interior_bg']], key=lambda f: (f['row'], f['col']))
+
+        def _group_columns(fs):
+            # Pack: row i = [empty[i], filled[i]]
+            result = []
+            for i in range(max(len(empty), len(filled))):
+                result.append(empty[i] if i < len(empty) else None)
+                result.append(filled[i] if i < len(filled) else None)
+            return result
+
+        orderings.append(('group_cols', _group_columns))
+
+    for nr, nc in grid_configs:
+        for ord_name, ord_fn in orderings:
+            ordered = ord_fn(frame_infos)
+
+            # Build output grid
+            candidate = np.full((oh, ow), bg, dtype=out0.dtype)
+            for idx in range(nr * nc):
+                r_block = idx // nc
+                c_block = idx % nc
+                if idx < len(ordered) and ordered[idx] is not None:
+                    bbox = ordered[idx]['bbox']
+                    candidate[r_block * bh:(r_block + 1) * bh,
+                              c_block * bw:(c_block + 1) * bw] = bbox
+
+            if np.array_equal(candidate, out0):
+                # Verify on all demos
+                all_ok = True
+                for di, (inp, out) in enumerate(demos[1:], 1):
+                    facts = perceive(inp)
+                    finfos = []
+                    for obj in facts.objects:
+                        fr = prim_find_frame(obj, inp)
+                        if fr:
+                            bb = prim_crop_bbox(inp, obj)
+                            if bb.shape != (bh, bw):
+                                continue
+                            if bb.shape[0] > 2 and bb.shape[1] > 2:
+                                interior_bg = np.all(bb[1:-1, 1:-1] == facts.bg)
+                            else:
+                                interior_bg = True
+                            finfos.append({
+                                'obj': obj, 'bbox': bb, 'frame': fr,
+                                'color': obj.color, 'row': obj.row, 'col': obj.col,
+                                'interior_bg': interior_bg,
+                            })
+
+                    if not finfos:
+                        all_ok = False
+                        break
+
+                    if has_groups and ord_name == 'group_cols':
+                        emp = sorted([f for f in finfos if f['interior_bg']], key=lambda f: (f['row'], f['col']))
+                        fil = sorted([f for f in finfos if not f['interior_bg']], key=lambda f: (f['row'], f['col']))
+                        o = []
+                        for j in range(max(len(emp), len(fil))):
+                            o.append(emp[j] if j < len(emp) else None)
+                            o.append(fil[j] if j < len(fil) else None)
+                    else:
+                        o = ord_fn(finfos)
+
+                    oh_i, ow_i = out.shape
+                    nr_i = oh_i // bh
+                    nc_i = ow_i // bw
+                    cand = np.full((oh_i, ow_i), facts.bg, dtype=inp.dtype)
+                    for idx in range(nr_i * nc_i):
+                        rb = idx // nc_i
+                        cb = idx % nc_i
+                        if idx < len(o) and o[idx] is not None:
+                            cand[rb * bh:(rb + 1) * bh, cb * bw:(cb + 1) * bw] = o[idx]['bbox']
+
+                    if not np.array_equal(cand, out):
+                        all_ok = False
+                        break
+
+                if all_ok:
+                    prog = SearchProgram(
+                        steps=[SearchStep('frame_bbox_pack',
+                                           {'ordering': ord_name, 'block_h': bh, 'block_w': bw,
+                                            'grid_cols': nc})],
+                        provenance=f'derive:frame_bbox_pack_{ord_name}_nc{nc}',
+                    )
+                    results.append(prog)
+                    return results
 
     return results
 

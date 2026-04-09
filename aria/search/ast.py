@@ -73,6 +73,14 @@ class Op(Enum):
     # Object repacking / structured output
     OBJECT_REPACK = auto()          # Grid → Grid  param: {ordering, layout, payload}
 
+    # Region decode
+    QUADRANT_TEMPLATE_DECODE = auto()  # Grid → Grid  param: {template_quadrant, seed_color}
+    FRAME_BBOX_PACK = auto()           # Grid → Grid  param: {ordering, block_h, block_w, grid_rows, grid_cols}
+    CROSS_STENCIL_RECOLOR = auto()     # Grid → Grid  param: {old_color, new_color}
+    LEGEND_FRAME_FILL = auto()         # Grid → Grid  param: {color_map: dict}
+    ANOMALY_HALO = auto()              # Grid → Grid  param: {c1, c2, halo_color}
+    CAVITY_TRANSFER = auto()           # Grid → Grid  param: {mode: 'auto'}
+
     # Object-level actions
     RECOLOR = auto()        # param: (selector_preds, new_color)
     REMOVE = auto()         # param: selector_preds
