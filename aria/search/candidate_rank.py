@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from aria.search.proposal_memory import SearchProposalPrior
+from aria.search.proposal_model import SearchFamilyModel
 from aria.search.sketch import SearchProgram
 
 
@@ -26,6 +27,7 @@ class SearchCandidateScore:
     execution_errors: int
     palette_overlap_avg: float
     prior_score: float
+    model_score: float
     step_count: int
 
     @property
@@ -36,6 +38,7 @@ class SearchCandidateScore:
             self.execution_errors,
             self.pixel_diff_total,
             -self.palette_overlap_avg,
+            -self.model_score,
             -self.prior_score,
             self.step_count,
         )
@@ -47,6 +50,7 @@ def score_search_program(
     *,
     task_signatures: frozenset[str],
     prior: SearchProposalPrior,
+    model: SearchFamilyModel | None = None,
     max_demos: int = 2,
 ) -> SearchCandidateScore:
     demos_passed = 0
@@ -77,6 +81,7 @@ def score_search_program(
         sum(palette_overlaps) / len(palette_overlaps) if palette_overlaps else 0.0
     )
     prior_score = prior.score_family(prog.signature, task_signatures)
+    model_score = model.score_family(prog.signature, task_signatures) if model is not None else 0.0
     return SearchCandidateScore(
         demos_passed=demos_passed,
         dims_correct=dims_correct,
@@ -84,6 +89,7 @@ def score_search_program(
         execution_errors=execution_errors,
         palette_overlap_avg=palette_overlap_avg,
         prior_score=prior_score,
+        model_score=model_score,
         step_count=len(prog.steps),
     )
 
@@ -94,6 +100,7 @@ def rank_search_candidates(
     *,
     task_signatures: frozenset[str],
     prior: SearchProposalPrior,
+    model: SearchFamilyModel | None = None,
     max_demos: int = 2,
 ) -> list[SearchProgram]:
     scored = [
@@ -103,6 +110,7 @@ def rank_search_candidates(
                 demos,
                 task_signatures=task_signatures,
                 prior=prior,
+                model=model,
                 max_demos=max_demos,
             ),
             idx,

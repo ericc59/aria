@@ -6,6 +6,7 @@ Current primary entrypoints:
 - `eval_arc2.py`: canonical ARC eval runner for the current `aria/search` stack
 - `build_search_prior.py`: rebuild the persisted proposal-memory prior from solved eval reports
 - `build_search_corpus.py`: export solved `aria/search` eval outcomes to a JSONL corpus for future learned proposal/ranking
+- `build_search_model.py`: train a small signature→family model from the solved-search corpus
 - `make_submission.py`: build `submission.json` from eval reports
 - `diagnose.py`: summarize eval report failures and gaps
 - `test_program.py`: execute a candidate program on a task

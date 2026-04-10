@@ -13,6 +13,7 @@
 - added an explicit replay/consolidation path for proposal memory via `scripts/build_search_prior.py`; proposal ordering can now be rebuilt into a persisted JSON prior instead of implicitly rescanning eval reports every run
 - added a small candidate-ranking layer for `aria/search`: seed and composition candidates are now reordered by generic verifier-style partial scores plus proposal prior strength before exact verification
 - added `proposal_corpus.py` and `scripts/build_search_corpus.py` to mine solved search outcomes into a JSONL corpus keyed by task signatures and solved families, so future learned proposal/ranking work has an explicit offline dataset
+- added a tiny trainable `SearchFamilyModel` (Bernoulli NB over task signatures) plus `scripts/build_search_model.py`; candidate ranking can now use a persisted family model as an additional amortized proposal signal
 
 ## 2026-04-09
 
