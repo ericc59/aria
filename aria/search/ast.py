@@ -195,10 +195,12 @@ class ASTProgram:
 
     Drop-in compatible with aria.guided.dsl.Program interface.
     """
-    def __init__(self, ast: ASTNode, description: str = ''):
+    def __init__(self, ast: ASTNode, description: str = '',
+                 search_program=None):
         self.ast = ast
         self.description = description or repr(ast)
         self.steps = []  # backward compat with guided.dsl.Program
+        self.search_program = search_program  # SearchProgram, for trace capture
 
     def execute(self, inp: Grid) -> Grid:
         from aria.search.executor import execute_ast

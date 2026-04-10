@@ -129,6 +129,18 @@ def evaluate_task(
         outcome["solved"] = all(known_test_correct) if known_test_correct else True
         outcome["library_ops_used"] = extract_library_ops_used(program_text, [])
         if outcome["solved"]:
+            # Capture structured solve trace if SearchProgram is available
+            search_prog = getattr(program, 'search_program', None)
+            if search_prog is not None:
+                from aria.search.trace_capture import capture_solve_trace
+                trace = capture_solve_trace(
+                    task_id=task_id,
+                    task_signatures=task_signatures,
+                    program=search_prog,
+                    n_demos=len(task.train),
+                    test_correct=all(known_test_correct) if known_test_correct else None,
+                )
+                outcome["solve_trace"] = trace.to_dict()
             if trace_store is not None:
                 trace_store.add_search_result(
                     task_id=task_id,

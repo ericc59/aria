@@ -1,0 +1,118 @@
+"""Macro schema for learned compositions above primitives.
+
+A Macro is a named, stored composition of low-level search steps
+that was discovered through repeated successful solves. Macros are:
+
+- learned/stored compositions, NOT new runtime ontology
+- reducible to lower-level SearchProgram steps
+- discardable if useless
+- rankable by utility/frequency
+
+This module defines the schema. Mining, storage, and retrieval
+are handled separately (trace_capture, build_search_traces).
+
+See docs/raw/aria_learning_roadmap.md Phase 3.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+import json
+
+
+@dataclass
+class Macro:
+    """A reusable learned composition of search steps.
+
+    Not a primitive. Not an AST op. A stored pattern that the search
+    engine can propose as a candidate, then lower to existing primitives.
+    """
+    # Identity
+    name: str                          # structural name, NOT task-id
+    description: str = ''
+
+    # Structure: the composition as a SearchProgram dict
+    program_template: dict = field(default_factory=dict)
+
+    # Provenance: how this was discovered
+    source_provenances: list[str] = field(default_factory=list)
+    source_task_count: int = 0         # how many tasks produced this pattern
+
+    # Utility
+    frequency: int = 0                 # times this pattern was observed
+    solve_rate: float = 0.0            # fraction of attempts that verified
+
+    # Signature for matching
+    action_signature: str = ''         # e.g. 'recolor -> recolor -> recolor'
+    selector_pattern: str = ''         # e.g. 'largest -> rule -> rule -> smallest'
+
+    def to_dict(self) -> dict:
+        return {
+            'schema_version': 1,
+            'name': self.name,
+            'description': self.description,
+            'program_template': self.program_template,
+            'source_provenances': self.source_provenances,
+            'source_task_count': self.source_task_count,
+            'frequency': self.frequency,
+            'solve_rate': self.solve_rate,
+            'action_signature': self.action_signature,
+            'selector_pattern': self.selector_pattern,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> Macro:
+        return cls(
+            name=d.get('name', ''),
+            description=d.get('description', ''),
+            program_template=d.get('program_template', {}),
+            source_provenances=d.get('source_provenances', []),
+            source_task_count=d.get('source_task_count', 0),
+            frequency=d.get('frequency', 0),
+            solve_rate=d.get('solve_rate', 0.0),
+            action_signature=d.get('action_signature', ''),
+            selector_pattern=d.get('selector_pattern', ''),
+        )
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict())
+
+    @classmethod
+    def from_json(cls, s: str) -> Macro:
+        return cls.from_dict(json.loads(s))
+
+
+@dataclass
+class MacroLibrary:
+    """Collection of learned macros.
+
+    Not a static ontology. Rebuilt from solve traces during consolidation.
+    """
+    macros: list[Macro] = field(default_factory=list)
+
+    def add(self, macro: Macro) -> None:
+        self.macros.append(macro)
+
+    def find_by_signature(self, action_sig: str) -> list[Macro]:
+        return [m for m in self.macros if m.action_signature == action_sig]
+
+    def save_json(self, path: str) -> None:
+        with open(path, 'w') as f:
+            json.dump({
+                'schema_version': 1,
+                'macros': [m.to_dict() for m in self.macros],
+            }, f, indent=2)
+
+    @classmethod
+    def load_json(cls, path: str) -> MacroLibrary:
+        lib = cls()
+        try:
+            with open(path) as f:
+                data = json.load(f)
+            for md in data.get('macros', []):
+                lib.add(Macro.from_dict(md))
+        except (FileNotFoundError, json.JSONDecodeError):
+            pass
+        return lib

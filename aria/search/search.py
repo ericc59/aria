@@ -48,7 +48,7 @@ def search_programs(
     for prog in derived:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
-        return ASTProgram(ast, desc)
+        return ASTProgram(ast, desc, search_program=prog)
 
     # Phase 0b: Cross-panel structural reasoning
     from aria.search.panels import derive_panel_programs
@@ -56,7 +56,7 @@ def search_programs(
     for prog in panel_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
-        return ASTProgram(ast, desc)
+        return ASTProgram(ast, desc, search_program=prog)
 
     # Phase 0c: Panel algebra (odd-select, majority-select, etc.)
     from aria.search.panel_ops import derive_panel_algebra_programs
@@ -67,7 +67,7 @@ def search_programs(
     for prog in panel_alg_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
-        return ASTProgram(ast, desc)
+        return ASTProgram(ast, desc, search_program=prog)
 
     # Phase 0d: Region decode/transfer programs (panel/legend tasks)
     from aria.search.decode import derive_region_programs
@@ -75,7 +75,7 @@ def search_programs(
     for prog in region_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
-        return ASTProgram(ast, desc)
+        return ASTProgram(ast, desc, search_program=prog)
 
     # Phase 0e: Binding-guided decode (uses role/relation substrate)
     from aria.search.binding_derive import derive_from_binding
@@ -83,7 +83,7 @@ def search_programs(
     for prog in binding_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
-        return ASTProgram(ast, desc)
+        return ASTProgram(ast, desc, search_program=prog)
 
     registry = proposal_prior.rank_schemas(build_seed_registry(), task_signatures)
 
