@@ -1226,35 +1226,24 @@ def _derive_frame_bbox_pack(demos):
     Detects framed objects, extracts their bboxes, tries to arrange them
     into a grid matching the output dimensions.
     """
-    from aria.guided.perceive import perceive
-    from aria.guided.dsl import prim_find_frame, prim_crop_bbox
+    from aria.search.frames import extract_rect_items
 
     results = []
 
     # Analyze demo 0
     inp0, out0 = demos[0]
-    facts0 = perceive(inp0)
-    bg = facts0.bg
-
-    # Find all framed objects
-    frame_infos = []
-    for obj in facts0.objects:
-        frame = prim_find_frame(obj, inp0)
-        if frame:
-            r0, c0, r1, c1 = frame
-            bbox = prim_crop_bbox(inp0, obj)
-            fh, fw = bbox.shape
-            # Check if interior is bg or colored
-            if fh > 2 and fw > 2:
-                interior = bbox[1:-1, 1:-1]
-                interior_is_bg = np.all(interior == bg)
-            else:
-                interior_is_bg = True
-            frame_infos.append({
-                'obj': obj, 'bbox': bbox, 'frame': frame,
-                'color': obj.color, 'row': obj.row, 'col': obj.col,
-                'interior_bg': interior_is_bg,
-            })
+    bg0 = int(np.bincount(inp0.ravel()).argmax())
+    frame_infos = [
+        {
+            'bbox': item.patch,
+            'color': item.color,
+            'row': item.row,
+            'col': item.col,
+            'interior_bg': item.interior_bg,
+            'kind': item.kind,
+        }
+        for item in extract_rect_items(inp0, bg=bg0, min_span=4)
+    ]
 
     if len(frame_infos) < 2:
         return []
@@ -1305,7 +1294,8 @@ def _derive_frame_bbox_pack(demos):
             ordered = ord_fn(frame_infos)
 
             # Build output grid
-            candidate = np.full((oh, ow), bg, dtype=out0.dtype)
+            out_bg0 = int(np.bincount(out0.ravel()).argmax())
+            candidate = np.full((oh, ow), out_bg0, dtype=out0.dtype)
             for idx in range(nr * nc):
                 r_block = idx // nc
                 c_block = idx % nc
@@ -1318,23 +1308,19 @@ def _derive_frame_bbox_pack(demos):
                 # Verify on all demos
                 all_ok = True
                 for di, (inp, out) in enumerate(demos[1:], 1):
-                    facts = perceive(inp)
-                    finfos = []
-                    for obj in facts.objects:
-                        fr = prim_find_frame(obj, inp)
-                        if fr:
-                            bb = prim_crop_bbox(inp, obj)
-                            if bb.shape != (bh, bw):
-                                continue
-                            if bb.shape[0] > 2 and bb.shape[1] > 2:
-                                interior_bg = np.all(bb[1:-1, 1:-1] == facts.bg)
-                            else:
-                                interior_bg = True
-                            finfos.append({
-                                'obj': obj, 'bbox': bb, 'frame': fr,
-                                'color': obj.color, 'row': obj.row, 'col': obj.col,
-                                'interior_bg': interior_bg,
-                            })
+                    bg_i = int(np.bincount(inp.ravel()).argmax())
+                    finfos = [
+                        {
+                            'bbox': item.patch,
+                            'color': item.color,
+                            'row': item.row,
+                            'col': item.col,
+                            'interior_bg': item.interior_bg,
+                            'kind': item.kind,
+                        }
+                        for item in extract_rect_items(inp, bg=bg_i, min_span=4)
+                        if item.patch.shape == (bh, bw)
+                    ]
 
                     if not finfos:
                         all_ok = False
@@ -1353,7 +1339,8 @@ def _derive_frame_bbox_pack(demos):
                     oh_i, ow_i = out.shape
                     nr_i = oh_i // bh
                     nc_i = ow_i // bw
-                    cand = np.full((oh_i, ow_i), facts.bg, dtype=inp.dtype)
+                    out_bg = int(np.bincount(out.ravel()).argmax())
+                    cand = np.full((oh_i, ow_i), out_bg, dtype=inp.dtype)
                     for idx in range(nr_i * nc_i):
                         rb = idx // nc_i
                         cb = idx % nc_i

@@ -757,11 +757,9 @@ def _exec_frame_bbox_pack(inp, step):
 
 def _do_frame_bbox_pack(inp, params):
     """Shared frame-bbox pack logic for both SearchProgram and AST execution."""
-    from aria.guided.perceive import perceive
-    from aria.guided.dsl import prim_find_frame, prim_crop_bbox
+    from aria.search.frames import extract_rect_items
 
-    facts = perceive(inp)
-    bg = facts.bg
+    bg = int(np.bincount(inp.ravel()).argmax())
     ordering = params.get('ordering', 'row')
     bh = params.get('block_h')
     bw = params.get('block_w')
@@ -770,22 +768,18 @@ def _do_frame_bbox_pack(inp, params):
     if not bh or not bw or not nc:
         return inp
 
-    frame_infos = []
-    for obj in facts.objects:
-        frame = prim_find_frame(obj, inp)
-        if frame:
-            bbox = prim_crop_bbox(inp, obj)
-            if bbox.shape != (bh, bw):
-                continue
-            if bbox.shape[0] > 2 and bbox.shape[1] > 2:
-                interior_bg = np.all(bbox[1:-1, 1:-1] == bg)
-            else:
-                interior_bg = True
-            frame_infos.append({
-                'bbox': bbox, 'color': obj.color,
-                'row': obj.row, 'col': obj.col,
-                'interior_bg': interior_bg,
-            })
+    frame_infos = [
+        {
+            'bbox': item.patch,
+            'color': item.color,
+            'row': item.row,
+            'col': item.col,
+            'interior_bg': item.interior_bg,
+            'kind': item.kind,
+        }
+        for item in extract_rect_items(inp, bg=bg, min_span=4)
+        if item.patch.shape == (bh, bw)
+    ]
 
     if not frame_infos:
         return inp

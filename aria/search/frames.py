@@ -38,6 +38,18 @@ class RectFrame:
         return self.patch[1:-1, 1:-1]
 
 
+@dataclass(frozen=True)
+class RectItem:
+    color: int
+    row: int
+    col: int
+    height: int
+    width: int
+    patch: np.ndarray
+    kind: str
+    interior_bg: bool
+
+
 def extract_rect_frames(
     grid: Grid,
     *,
@@ -83,6 +95,68 @@ def extract_rect_frames(
     return frames
 
 
+def extract_rect_items(
+    grid: Grid,
+    *,
+    bg: int = 0,
+    min_span: int = 4,
+    allow_frames: bool = True,
+    allow_solids: bool = True,
+) -> list[RectItem]:
+    """Extract exact rectangular items, including hollow frames and solid blocks."""
+    items: list[RectItem] = []
+    for color in sorted(int(v) for v in np.unique(grid) if int(v) != bg):
+        labels, count = ndimage.label(grid == color, structure=_STRUCTURE4)
+        for idx in range(1, count + 1):
+            coords = np.argwhere(labels == idx)
+            if len(coords) == 0:
+                continue
+            r0, c0 = coords.min(axis=0)
+            r1, c1 = coords.max(axis=0)
+            h = int(r1 - r0 + 1)
+            w = int(c1 - c0 + 1)
+            if h < min_span or w < min_span:
+                continue
+            mask = labels[r0:r1 + 1, c0:c1 + 1] == idx
+            patch = grid[r0:r1 + 1, c0:c1 + 1].copy()
+            if allow_solids and np.all(mask):
+                items.append(
+                    RectItem(
+                        color=int(color),
+                        row=int(r0),
+                        col=int(c0),
+                        height=h,
+                        width=w,
+                        patch=patch,
+                        kind="solid",
+                        interior_bg=False,
+                    )
+                )
+                continue
+            if not allow_frames:
+                continue
+            border = np.zeros_like(mask, dtype=bool)
+            border[0, :] = True
+            border[-1, :] = True
+            border[:, 0] = True
+            border[:, -1] = True
+            if np.all(mask[border]) and not np.any(mask[1:-1, 1:-1]):
+                items.append(
+                    RectItem(
+                        color=int(color),
+                        row=int(r0),
+                        col=int(c0),
+                        height=h,
+                        width=w,
+                        patch=patch,
+                        kind="frame",
+                        interior_bg=True,
+                    )
+                )
+    items.sort(key=lambda item: (item.row, item.col, item.color, item.kind))
+    return items
+
+
 def group_frames_by_color(frames: list[RectFrame]) -> dict[int, list[RectFrame]]:
     """Stable family grouping for frame pack tasks."""
     grouped: dict[int, list[RectFrame]] = defaultdict(list)
@@ -116,4 +190,3 @@ def render_frame_family(
     if not rows or not cols:
         return np.zeros((0, 0), dtype=canvas.dtype)
     return canvas[np.ix_(rows, cols)]
-

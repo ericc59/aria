@@ -4,6 +4,7 @@
 - admission audit: quarantined `CORNER_DIAG_FILL` from canonical `aria/search`; hidden-eval success depended on a room-level fallback that did not meet the generality bar
 - retained `DIAGONAL_COLLISION_TRACE`, `MASKED_PATCH_TRANSFER`, `SEPARATOR_MOTIF_BROADCAST`, `LINE_ARITH_BROADCAST`, and `BARRIER_PORT_TRANSFER` as the current defensible additions from this wave
 - started G07 substrate with exact rectangular frame-item extraction and frame-family grouping/column compaction helpers for frame-pack tasks like `b5ca7ac4` and `2ba387bc`
+- refactored `frame_bbox_pack` to use explicit rectangular item extraction (hollow frames + solid blocks) instead of the older object/frame heuristic
 
 ## 2026-04-09
 
