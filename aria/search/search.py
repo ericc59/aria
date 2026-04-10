@@ -17,6 +17,7 @@ from aria.search.sketch import SearchProgram
 from aria.search.seeds import build_seed_registry, SeedSchema, _color_selects
 from aria.search.ast import ASTNode, ASTProgram
 from aria.search.proposal_memory import load_default_search_prior
+from aria.search.candidate_rank import rank_search_candidates
 from aria.graph.signatures import compute_task_signatures
 from aria.types import DemoPair
 
@@ -96,6 +97,13 @@ def search_programs(
                     step = SearchStep(action=schema.action, params=params, select=sel)
                     candidates.append(SearchProgram(steps=[step], provenance=schema.name))
 
+        candidates = rank_search_candidates(
+            candidates,
+            demos,
+            task_signatures=task_signatures,
+            prior=proposal_prior,
+            max_demos=min(2, len(demos)),
+        )
         for prog in candidates:
             if prog.verify(demos):
                 ast = prog.to_ast()
@@ -106,16 +114,30 @@ def search_programs(
     # For now: try pairs of single-step programs
     verified_singles = []
     for schema in registry:
-        for prog in schema.enumerate(demos):
-            # Check if this is a useful partial (reduces error)
+        partials = rank_search_candidates(
+            schema.enumerate(demos),
+            demos,
+            task_signatures=task_signatures,
+            prior=proposal_prior,
+            max_demos=min(2, len(demos)),
+        )
+        for prog in partials[:8]:
             try:
                 mid = prog.execute(demos[0][0])
                 if not np.array_equal(mid, demos[0][0]):
                     verified_singles.append(prog)
             except Exception:
                 pass
-            if len(verified_singles) > 50:
-                break
+        if len(verified_singles) > 50:
+            break
+
+    verified_singles = rank_search_candidates(
+        verified_singles,
+        demos,
+        task_signatures=task_signatures,
+        prior=proposal_prior,
+        max_demos=min(2, len(demos)),
+    )
 
     for p1 in verified_singles[:20]:
         for p2 in verified_singles[:20]:

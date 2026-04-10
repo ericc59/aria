@@ -11,6 +11,7 @@
 - added the first persistent `aria/search` proposal prior: search now mines past solved eval reports by task signatures and uses that memory to rank derive families and seed schemas before exact verification
 - eval outcomes and trace-store search records now persist computed `task_signatures`, so future runs add better proposal memory instead of only reporting solved/unsolved
 - added an explicit replay/consolidation path for proposal memory via `scripts/build_search_prior.py`; proposal ordering can now be rebuilt into a persisted JSON prior instead of implicitly rescanning eval reports every run
+- added a small candidate-ranking layer for `aria/search`: seed and composition candidates are now reordered by generic verifier-style partial scores plus proposal prior strength before exact verification
 
 ## 2026-04-09
 
