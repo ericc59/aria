@@ -224,6 +224,12 @@ class SearchProgram:
             elif step.action == 'crop_fixed':
                 p = step.params or {}
                 result = result[p['r0']:p['r0']+p['h'], p['c0']:p['c0']+p['w']]
+            elif step.action == 'tile':
+                p = step.params or {}
+                result = np.tile(result, (p.get('rows', 1), p.get('cols', 1)))
+            elif step.action == 'scale':
+                f = (step.params or {}).get('factor', 1)
+                result = np.repeat(np.repeat(result, f, axis=0), f, axis=1)
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()

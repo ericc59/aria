@@ -100,6 +100,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    # Strategy 0d: Scale-up or tile (output = repeated/scaled input)
+    progs = _derive_scale_or_tile(demos)
+    if progs:
+        return progs
+
     # Compute transitions for all demos
     all_transitions = []
     all_facts = []
@@ -141,6 +146,54 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
 # ---------------------------------------------------------------------------
 # Strategy 1: Uniform transition
 # ---------------------------------------------------------------------------
+
+def _derive_scale_or_tile(demos):
+    """Derive programs where the output is a scaled or tiled version of the input."""
+    if not demos:
+        return []
+
+    for inp, out in demos:
+        if out.shape[0] <= inp.shape[0] and out.shape[1] <= inp.shape[1]:
+            return []
+
+    # Try exact tile
+    inp0, out0 = demos[0]
+    ih, iw = inp0.shape
+    oh, ow = out0.shape
+
+    if oh % ih == 0 and ow % iw == 0:
+        rr, rc = oh // ih, ow // iw
+        if np.array_equal(np.tile(inp0, (rr, rc)), out0):
+            all_ok = all(np.array_equal(np.tile(inp, (out.shape[0]//inp.shape[0], out.shape[1]//inp.shape[1])), out)
+                         for inp, out in demos
+                         if out.shape[0] % inp.shape[0] == 0 and out.shape[1] % inp.shape[1] == 0)
+            if all_ok:
+                return [SearchProgram(
+                    steps=[SearchStep('tile', {'rows': rr, 'cols': rc})],
+                    provenance='derive:exact_tile',
+                )]
+
+    # Try pixel scale (each cell → NxN block)
+    if oh % ih == 0 and ow % iw == 0:
+        sr, sc = oh // ih, ow // iw
+        if sr == sc:
+            scaled = np.repeat(np.repeat(inp0, sr, axis=0), sc, axis=1)
+            if np.array_equal(scaled, out0):
+                all_ok = all(
+                    np.array_equal(
+                        np.repeat(np.repeat(inp, out.shape[0]//inp.shape[0], axis=0),
+                                  out.shape[1]//inp.shape[1], axis=1), out)
+                    for inp, out in demos
+                    if out.shape[0] % inp.shape[0] == 0 and out.shape[1] % inp.shape[1] == 0
+                )
+                if all_ok:
+                    return [SearchProgram(
+                        steps=[SearchStep('scale', {'factor': sr})],
+                        provenance='derive:pixel_scale',
+                    )]
+
+    return []
+
 
 def _derive_direct_crop(demos):
     """Derive programs where the output is an exact subgrid of the input.
