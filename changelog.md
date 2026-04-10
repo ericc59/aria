@@ -24,6 +24,7 @@
 - tightened public eval accounting: `aria/eval.py` now treats a task as solved only when known test outputs are correct, preventing false solves from polluting refreshed reports and learned search priors
 - filled another canonical AST surface gap: `Op.TILE` now executes in `aria/search/executor.py`, so derived tile programs fail honestly as unsolved instead of crashing mid-eval refresh
 - added `/Users/ericc59/Dev/aria/docs/raw/aria_learning_roadmap.md`, a concrete implementation roadmap for moving `aria` toward low-level primitives + learned macros + learned routing + replay/consolidation
+- added `/Users/ericc59/Dev/aria/docs/raw/looped_models_vs_aria.md`, a short architecture note on what looped language model work suggests for `aria` and what not to over-infer from benchmark tables
 
 ## 2026-04-09
 
