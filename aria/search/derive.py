@@ -138,6 +138,16 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     progs = _derive_conditional_dispatch(all_transitions, all_facts, demos)
     results.extend(progs)
 
+    # Strategy 2c: Action-first dispatch (group by observed action, find selectors)
+    if not results:
+        progs = _derive_action_first_dispatch(all_transitions, all_facts, demos)
+        results.extend(progs)
+
+    # Strategy 2d: Rank-recolor (all objects recolored by size rank)
+    if not results:
+        progs = _derive_rank_recolor(all_transitions, all_facts, demos)
+        results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -978,6 +988,216 @@ def _derive_conditional_dispatch(all_transitions, all_facts, demos):
             return results
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2c: Action-first dispatch
+# ---------------------------------------------------------------------------
+
+def _derive_action_first_dispatch(all_transitions, all_facts, demos):
+    """Conditional dispatch via action-first grouping.
+
+    Groups changed objects by their observed action across ALL demos,
+    then finds cross-demo selectors for each action group.
+
+    Handles cases where selector-first partitioning fails to generalize
+    (e.g., color-based partitions in demo 0 that don't hold in demo 1).
+    """
+    # Group by match_type (coarse) across all demos
+    per_demo_groups = []
+    for trans in all_transitions:
+        groups = defaultdict(set)
+        for t in trans:
+            if t.match_type == 'identical' or not t.in_obj:
+                continue
+            groups[t.match_type].add(t.in_obj.oid)
+        per_demo_groups.append(groups)
+
+    # Consistent match_type grouping across demos
+    keys_0 = set(per_demo_groups[0].keys())
+    if len(keys_0) < 2:
+        return []
+    for pdg in per_demo_groups[1:]:
+        if set(pdg.keys()) != keys_0:
+            return []
+
+    bg = _infer_bg_from_demos(demos)
+    steps = []
+
+    for mtype in sorted(keys_0):
+        target_oids_per_demo = [pdg.get(mtype, set()) for pdg in per_demo_groups]
+
+        # Find a cross-demo selector
+        sel = _find_selector_for_oid_sets(target_oids_per_demo, all_facts)
+        if sel is None:
+            return []
+
+        # Derive the action for this group
+        all_group_trans = []
+        for di, trans in enumerate(all_transitions):
+            oids = target_oids_per_demo[di]
+            gt = [t for t in trans if t.in_obj and t.in_obj.oid in oids]
+            all_group_trans.append(gt)
+
+        step = _derive_group_step_multi(all_group_trans, sel, demos, bg)
+        if step is None:
+            return []
+        steps.append(step)
+
+    if len(steps) < 2:
+        return []
+
+    prog = SearchProgram(steps=steps, provenance='derive:action_first_dispatch')
+    if prog.verify(demos):
+        return [prog]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2d: Rank-recolor
+# ---------------------------------------------------------------------------
+
+def _derive_rank_recolor(all_transitions, all_facts, demos):
+    """All changed objects recolored to distinct colors by size rank.
+
+    Detects: all objects get match_type='recolored', target colors are
+    distinct and map consistently to size rank across demos.
+    Emits N separate recolor steps, each with a per-rank selector.
+    """
+    # Check: all changed objects are recolored
+    for trans in all_transitions:
+        changed = [t for t in trans if t.match_type != 'identical' and t.in_obj]
+        if not changed:
+            return []
+        if not all(t.match_type == 'recolored' for t in changed):
+            return []
+
+    # In each demo, sort changed objects by size (desc) and extract rank→color
+    rank_maps = []
+    for trans in all_transitions:
+        changed = [(t.in_obj.size, t.color_to, t.in_obj.oid)
+                   for t in trans if t.match_type == 'recolored' and t.in_obj]
+        changed.sort(key=lambda x: -x[0])
+        rank_map = [color for _, color, _ in changed]
+        rank_maps.append(rank_map)
+
+    # Consistent rank count and rank→color mapping
+    if not rank_maps:
+        return []
+    n_ranks = len(rank_maps[0])
+    if n_ranks < 2:
+        return []
+    for rm in rank_maps[1:]:
+        if len(rm) != n_ranks:
+            return []
+        if rm != rank_maps[0]:
+            return []
+
+    # Build per-rank selectors and recolor steps
+    target_colors = rank_maps[0]
+    steps = []
+
+    for rank_idx in range(n_ranks):
+        # Collect OIDs for this rank in each demo
+        target_oids_per_demo = []
+        for di, trans in enumerate(all_transitions):
+            changed = [(t.in_obj.size, t.in_obj.oid)
+                       for t in trans if t.match_type == 'recolored' and t.in_obj]
+            changed.sort(key=lambda x: -x[0])
+            if rank_idx < len(changed):
+                target_oids_per_demo.append({changed[rank_idx][1]})
+            else:
+                return []
+
+        sel = _find_selector_for_oid_sets(target_oids_per_demo, all_facts)
+        if sel is None:
+            return []
+
+        steps.append(SearchStep('recolor', {'color': target_colors[rank_idx]}, sel))
+
+    prog = SearchProgram(steps=steps, provenance='derive:rank_recolor')
+    if prog.verify(demos):
+        return [prog]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Shared: cross-demo selector from OID sets
+# ---------------------------------------------------------------------------
+
+def _find_selector_for_oid_sets(target_oids_per_demo, all_facts):
+    """Find a selector that selects the given OID sets in each demo.
+
+    Tries simple selectors first, falls back to cross-demo rule induction.
+    """
+    # Fast path: try simple selector from demo 0
+    sel = _find_selector(target_oids_per_demo[0], all_facts[0])
+    if sel is not None:
+        ok = True
+        for di in range(1, len(all_facts)):
+            expected = target_oids_per_demo[di]
+            selected = _resolve_selector(sel, all_facts[di])
+            if selected is None or selected != expected:
+                ok = False
+                break
+        if ok:
+            return sel
+
+    # Slow path: cross-demo rule induction
+    from aria.search.selection_facts import extract_object_facts, STRUCTURAL_FEATURES
+    from aria.search.rules import induce_boolean_dnf
+
+    all_rows = []
+    all_labels = []
+    for di in range(len(all_facts)):
+        target_oids = target_oids_per_demo[di]
+        fact_rows = extract_object_facts(all_facts[di])
+        for obj, row in zip(all_facts[di].objects, fact_rows):
+            all_rows.append(row)
+            all_labels.append(obj.oid in target_oids)
+
+    if not any(all_labels):
+        return None
+    if all(all_labels):
+        return StepSelect('all')
+
+    # Structural features (fast)
+    candidate_fields = list(STRUCTURAL_FEATURES)
+    for row in all_rows:
+        for f in candidate_fields:
+            if f not in row:
+                row[f] = False
+
+    rule = induce_boolean_dnf(
+        all_rows, all_labels,
+        candidate_fields=candidate_fields,
+        max_clause_size=3,
+        max_clauses=1,
+    )
+    if rule is not None:
+        return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    # Extended with color features
+    all_features: set[str] = set()
+    for row in all_rows:
+        all_features.update(row.keys())
+    color_fields = sorted(f for f in all_features if f.startswith('color_is_'))
+    extended_fields = candidate_fields + color_fields
+    for row in all_rows:
+        for f in extended_fields:
+            if f not in row:
+                row[f] = False
+
+    rule = induce_boolean_dnf(
+        all_rows, all_labels,
+        candidate_fields=extended_fields,
+        max_clause_size=2,
+        max_clauses=1,
+    )
+    if rule is not None:
+        return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    return None
 
 
 def _partition_generalizes(partition, all_transitions, all_facts):
