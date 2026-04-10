@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate ARIA on ARC-AGI-2 tasks.
+"""Evaluate the canonical `aria/search` solver on ARC datasets.
 
 Usage:
     # Full ARC-2 eval set (120 tasks):
@@ -57,7 +57,7 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=0, help="Max tasks to evaluate (0=all)")
     parser.add_argument(
         "--time-budget", type=float, default=30.0,
-        help="Per-task time budget in seconds for the guided+search solver",
+        help="Per-task time budget in seconds for the search solver",
     )
 
     parser.add_argument("--retrieval-limit", type=int, default=0)

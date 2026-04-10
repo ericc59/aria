@@ -202,6 +202,7 @@ def test_eval_config_to_dict_complete():
         "retrieval_limit", "max_search_steps", "max_search_candidates",
         "max_refinement_rounds", "include_core_ops", "beam_width",
         "beam_rounds", "beam_mutations_per_candidate", "rerank_edits",
+        "time_budget_sec",
     }
 
 
@@ -225,7 +226,7 @@ def test_eval_outcome_has_solve_phase():
 
 
 def test_eval_outcome_solve_phase_direct_synthesis():
-    """Transpose task should be solved by direct synthesis."""
+    """Transpose task should be solved by canonical search."""
     config = EvalConfig(max_search_steps=1, max_search_candidates=200)
     outcome = evaluate_task(
         "t1", _transpose_task(),
@@ -233,7 +234,7 @@ def test_eval_outcome_solve_phase_direct_synthesis():
         config=config,
     )
     assert outcome["solved"]
-    assert outcome["solve_phase"] == "direct_synthesis"
+    assert outcome["solve_phase"] == "search"
 
 
 def test_eval_outcome_unsolved_phase():

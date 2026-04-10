@@ -2,7 +2,8 @@
 
 Current primary entrypoints:
 
-- `eval_arc2.py`: canonical ARC eval runner for the current guided + `aria/search` stack
+- `solve.py`: canonical single-task solver for the current `aria/search` stack
+- `eval_arc2.py`: canonical ARC eval runner for the current `aria/search` stack
 - `make_submission.py`: build `submission.json` from eval reports
 - `diagnose.py`: summarize eval report failures and gaps
 - `test_program.py`: execute a candidate program on a task
@@ -22,4 +23,5 @@ Legacy experiment runners and offline-era utilities live under:
 - `scripts/legacy/analysis/`
 
 They are retained for reference, but they are not part of the current
-canonical `aria/search` workflow.
+canonical `aria/search` workflow. Older mixed-solver helpers such as
+`solve_eval.py` live there as well.
