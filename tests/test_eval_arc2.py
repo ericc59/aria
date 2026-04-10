@@ -127,6 +127,21 @@ def test_recolor_map_executes_after_ast_lowering():
     assert (prog.execute(inp) == expected).all()
 
 
+def test_tile_executes_after_ast_lowering():
+    inp = grid_from_list([[1, 2], [3, 4]])
+    expected = grid_from_list([
+        [1, 2, 1, 2],
+        [3, 4, 3, 4],
+        [1, 2, 1, 2],
+        [3, 4, 3, 4],
+    ])
+    prog = SearchProgram(
+        steps=[SearchStep("tile", {"rows": 2, "cols": 2, "transforms": {}})],
+        provenance="derive:exact_tile",
+    )
+    assert (prog.execute(inp) == expected).all()
+
+
 def test_evaluate_task_requires_public_test_correctness(monkeypatch):
     task = Task(
         train=(DemoPair(input=grid_from_list([[1]]), output=grid_from_list([[1]])),),

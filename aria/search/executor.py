@@ -124,6 +124,12 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         return _XFORM_FNS[op](grid) if grid is not None else None
 
     # --- Grid constructors ---
+    if op == Op.TILE:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_tile_ast(grid, node.param)
+
     if op == Op.REPAIR_FRAMES:
         from aria.guided.synthesize import _repair_all_frames
         grid = _child(node, 0, inp, ctx)
@@ -333,6 +339,56 @@ def _child(node, idx, inp, ctx):
     if idx < len(node.children):
         return execute_ast(node.children[idx], inp, ctx)
     return None
+
+
+def _apply_named_transform(grid: Grid, name: str) -> Grid:
+    if name == 'flip_h':
+        return grid[:, ::-1]
+    if name == 'flip_v':
+        return grid[::-1, :]
+    if name == 'flip_hv':
+        return grid[::-1, ::-1]
+    if name == 'rot90':
+        return np.rot90(grid)
+    if name == 'rot180':
+        return np.rot90(grid, 2)
+    if name == 'transpose':
+        return grid.T
+    return grid
+
+
+def _exec_tile_ast(grid: Grid, param) -> Grid:
+    """Tile a grid into a larger block layout.
+
+    Current search derivations only use plain repetition with an empty
+    transform map. A sparse transform map remains supported for future
+    lowering: keys may be ``(row_idx, col_idx)`` tuples or ``"r,c"`` strings,
+    values are transform names like ``rot90`` or ``flip_h``.
+    """
+    if isinstance(param, tuple):
+        rows = int(param[0]) if len(param) > 0 else 1
+        cols = int(param[1]) if len(param) > 1 else 1
+        transforms = param[2] if len(param) > 2 else {}
+    else:
+        rows, cols = 1, 1
+        transforms = {}
+
+    rows = max(rows, 1)
+    cols = max(cols, 1)
+    if not transforms:
+        return np.tile(grid, (rows, cols))
+
+    gh, gw = grid.shape
+    result = np.zeros((gh * rows, gw * cols), dtype=grid.dtype)
+    for r in range(rows):
+        for c in range(cols):
+            xform = transforms.get((r, c), transforms.get(f"{r},{c}"))
+            tile = _apply_named_transform(grid, xform) if isinstance(xform, str) else grid
+            th, tw = tile.shape
+            if th != gh or tw != gw:
+                return np.tile(grid, (rows, cols))
+            result[r * gh:(r + 1) * gh, c * gw:(c + 1) * gw] = tile
+    return result
 
 
 def _exec_object_repack(grid, params):

@@ -16,6 +16,7 @@
 - added a tiny trainable `SearchFamilyModel` (Bernoulli NB over task signatures) plus `scripts/build_search_model.py`; candidate ranking can now use a persisted family model as an additional amortized proposal signal
 - fixed the AST contract for `recolor_map`: global color substitution now has its own canonical AST op/executor path instead of mislowering to object-level `RECOLOR`
 - tightened public eval accounting: `aria/eval.py` now treats a task as solved only when known test outputs are correct, preventing false solves from polluting refreshed reports and learned search priors
+- filled another canonical AST surface gap: `Op.TILE` now executes in `aria/search/executor.py`, so derived tile programs fail honestly as unsolved instead of crashing mid-eval refresh
 
 ## 2026-04-09
 
