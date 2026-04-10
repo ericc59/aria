@@ -71,6 +71,8 @@ def test_evaluate_task_solved():
     assert outcome["solve_source"] == "search"
     assert "program" in outcome
     assert outcome["test_results"][0]["correct"]
+    assert "dims:different" in outcome["task_signatures"]
+    assert "size:multiplicative" in outcome["task_signatures"]
 
 
 def test_evaluate_task_unsolved():

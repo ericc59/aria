@@ -8,6 +8,8 @@
 - extended `frame_bbox_pack` with family-side lane packing for G07: same-color rectangular families now get overlap-aware column clustering and side placement without a new task op
 - added `registration.py` substrate for anchor-conditioned transfer tasks: anchored shape extraction and movable-module clustering now expose the missing representation behind `20270e3b`
 - extended `registration.py` with base target-site enumeration and exact anchored overlay candidate generation; `20270e3b` now has a clean search space over plausible module placements instead of hand analysis
+- added the first persistent `aria/search` proposal prior: search now mines past solved eval reports by task signatures and uses that memory to rank derive families and seed schemas before exact verification
+- eval outcomes and trace-store search records now persist computed `task_signatures`, so future runs add better proposal memory instead of only reporting solved/unsolved
 
 ## 2026-04-09
 

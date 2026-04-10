@@ -16,6 +16,9 @@ import numpy as np
 from aria.search.sketch import SearchProgram
 from aria.search.seeds import build_seed_registry, SeedSchema, _color_selects
 from aria.search.ast import ASTNode, ASTProgram
+from aria.search.proposal_memory import load_default_search_prior
+from aria.graph.signatures import compute_task_signatures
+from aria.types import DemoPair
 
 
 def search_programs(
@@ -29,9 +32,16 @@ def search_programs(
     2. Seed schema enumeration (blind parameter search)
     3. 2-step compositions
     """
+    del time_budget
+
+    task_signatures = compute_task_signatures(
+        tuple(DemoPair(input=inp, output=out) for inp, out in demos)
+    )
+    proposal_prior = load_default_search_prior()
+
     # Phase 0a: Correspondence-derived programs (structural transitions)
     from aria.search.derive import derive_programs
-    derived = derive_programs(demos)
+    derived = proposal_prior.rank_programs(derive_programs(demos), task_signatures)
     for prog in derived:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
@@ -39,7 +49,7 @@ def search_programs(
 
     # Phase 0b: Cross-panel structural reasoning
     from aria.search.panels import derive_panel_programs
-    panel_progs = derive_panel_programs(demos)
+    panel_progs = proposal_prior.rank_programs(derive_panel_programs(demos), task_signatures)
     for prog in panel_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
@@ -47,7 +57,10 @@ def search_programs(
 
     # Phase 0c: Panel algebra (odd-select, majority-select, etc.)
     from aria.search.panel_ops import derive_panel_algebra_programs
-    panel_alg_progs = derive_panel_algebra_programs(demos)
+    panel_alg_progs = proposal_prior.rank_programs(
+        derive_panel_algebra_programs(demos),
+        task_signatures,
+    )
     for prog in panel_alg_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
@@ -55,7 +68,7 @@ def search_programs(
 
     # Phase 0d: Region decode/transfer programs (panel/legend tasks)
     from aria.search.decode import derive_region_programs
-    region_progs = derive_region_programs(demos)
+    region_progs = proposal_prior.rank_programs(derive_region_programs(demos), task_signatures)
     for prog in region_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
@@ -63,13 +76,13 @@ def search_programs(
 
     # Phase 0e: Binding-guided decode (uses role/relation substrate)
     from aria.search.binding_derive import derive_from_binding
-    binding_progs = derive_from_binding(demos)
+    binding_progs = proposal_prior.rank_programs(derive_from_binding(demos), task_signatures)
     for prog in binding_progs:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc)
 
-    registry = build_seed_registry()
+    registry = proposal_prior.rank_schemas(build_seed_registry(), task_signatures)
 
     # Phase 1: single-step schemas
     for schema in registry:

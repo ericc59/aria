@@ -20,6 +20,7 @@ from aria.reporting import build_solve_report, extract_library_ops_used
 from aria.solve import solve_task
 from aria.trace_store import RefinementTraceStore
 from aria.types import LibraryEntry, grid_eq
+from aria.graph.signatures import compute_task_signatures
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,7 @@ def evaluate_task(
 ) -> dict[str, Any]:
     """Evaluate a single task and return a result dict."""
     t0 = time.time()
+    task_signatures = tuple(sorted(compute_task_signatures(task.train)))
     result = solve_task(
         list((pair.input, pair.output) for pair in task.train),
         time_budget=config.time_budget_sec,
@@ -100,7 +102,7 @@ def evaluate_task(
         "total_candidates": 0,
         "solve_source": result["source"] or "unsolved",
         "abstractions_mined": 0,
-        "task_signatures": [],
+        "task_signatures": list(task_signatures),
         "solve_phase": result["source"] or "unsolved",
         "abstraction_hints_available": False,
     }
@@ -123,7 +125,7 @@ def evaluate_task(
                 task_id=task_id,
                 solved=True,
                 winning_program_text=program_text,
-                task_signatures=(),
+                task_signatures=task_signatures,
             )
     else:
         outcome["failure_bucket"] = "search_budget_exhausted"
@@ -135,7 +137,7 @@ def evaluate_task(
             trace_store.add_search_result(
                 task_id=task_id,
                 solved=False,
-                task_signatures=(),
+                task_signatures=task_signatures,
             )
 
     return outcome
