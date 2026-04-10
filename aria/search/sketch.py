@@ -210,9 +210,8 @@ class SearchProgram:
             elif step.action == 'object_highlight':
                 result = _exec_object_highlight_full(result, step.params or {})
             elif step.action == 'cavity_transfer':
-                # Experimental — not canonical, kept for search-time derivation only
-                from aria.search.executor import _exec_cavity_transfer_auto
-                result = _exec_cavity_transfer_auto(result)
+                from aria.search.executor import _exec_cavity_transfer
+                result = _exec_cavity_transfer(result, step.params or {})
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()

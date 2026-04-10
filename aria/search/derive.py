@@ -932,17 +932,20 @@ def _derive_cavity_transfer(demos):
     if not pairs:
         return []
 
-    # Demo 0 has specific color pairs. Verify using color-agnostic execution on ALL demos.
-    from aria.search.executor import _exec_cavity_transfer_auto
+    # Emit pairs as params; verify using the parameterized executor on ALL demos.
+    from aria.search.executor import _exec_cavity_transfer
 
-    for i, (inp, out) in enumerate(demos):
-        result = _exec_cavity_transfer_auto(inp)
+    pair_tuples = [(mc, hc, d) for mc, hc, d, _ in pairs]
+    cavity_params = {'pairs': pair_tuples}
+
+    for inp, out in demos:
+        result = _exec_cavity_transfer(inp, cavity_params)
         if not np.array_equal(result, out):
             return []
 
     prog = SearchProgram(
-        steps=[SearchStep('cavity_transfer', {'mode': 'auto'})],
-        provenance='derive:cavity_transfer_auto',
+        steps=[SearchStep('cavity_transfer', cavity_params)],
+        provenance='derive:cavity_transfer',
     )
     return [prog]
 
@@ -983,13 +986,42 @@ def _derive_masked_patch_transfer(demos):
 
 
 def _derive_separator_motif_broadcast(demos):
-    """Detect separator-line motifs broadcast into an empty opposite side."""
-    from aria.search.executor import _exec_separator_motif_broadcast
+    """Detect separator-line motifs broadcast into an empty opposite side.
+
+    Computes sep_axis and sep_idx at derive time so the executor can skip
+    auto-detection at test time.
+    """
+    from aria.search.executor import (
+        _broadcast_run_score,
+        _exec_separator_motif_broadcast,
+        _mono_separator_candidates,
+    )
+    from aria.guided.perceive import perceive
 
     if any(inp.shape != out.shape for inp, out in demos):
         return []
 
-    params = {"axis": "auto"}
+    # --- Derive sep_axis and sep_idx from demo 0 ---
+    inp0, _ = demos[0]
+    facts0 = perceive(inp0)
+    bg0 = int(facts0.bg)
+    row_seps = sorted({s.index for s in facts0.separators if s.axis == "row"})
+    col_seps = sorted({s.index for s in facts0.separators if s.axis == "col"})
+    row_candidates = sorted(set(row_seps) | set(_mono_separator_candidates(inp0, "row", bg0)))
+    col_candidates = sorted(set(col_seps) | set(_mono_separator_candidates(inp0, "col", bg0)))
+
+    candidates: list[tuple[str, int, int]] = []
+    for idx in row_candidates:
+        candidates.append(("row", idx, _broadcast_run_score(inp0, "row", idx, bg0)))
+    for idx in col_candidates:
+        candidates.append(("col", idx, _broadcast_run_score(inp0, "col", idx, bg0)))
+    candidates = [c for c in candidates if c[2] > 0]
+    if not candidates:
+        return []
+
+    sep_axis, sep_idx, _ = max(candidates, key=lambda item: (item[2], item[0] == "col"))
+
+    params = {"sep_axis": sep_axis, "sep_idx": int(sep_idx)}
     if all(np.array_equal(_exec_separator_motif_broadcast(inp, params), out) for inp, out in demos):
         prog = SearchProgram(
             steps=[SearchStep("separator_motif_broadcast", params)],
@@ -1017,13 +1049,28 @@ def _derive_line_arith_broadcast(demos):
 
 
 def _derive_barrier_port_transfer(demos):
-    """Detect object relocation through barrier opening families."""
-    from aria.search.executor import _exec_barrier_port_transfer
+    """Detect object relocation through barrier opening families.
+
+    Pre-computes barrier_color, barrier_orient, and bg from demo 0 so
+    the executor can skip auto-detection at test time.
+    """
+    from aria.search.executor import _detect_barrier_params, _exec_barrier_port_transfer
 
     if any(inp.shape != out.shape for inp, out in demos):
         return []
 
-    params = {"mode": "auto"}
+    # --- Extract barrier structural params from demo 0 ---
+    inp0, _ = demos[0]
+    detected = _detect_barrier_params(inp0)
+    if detected is None:
+        return []
+
+    barrier_color, barrier_orient, bg = detected
+    params = {
+        "barrier_color": int(barrier_color),
+        "barrier_orient": barrier_orient,
+        "bg": int(bg),
+    }
     if all(np.array_equal(_exec_barrier_port_transfer(inp, params), out) for inp, out in demos):
         prog = SearchProgram(
             steps=[SearchStep("barrier_port_transfer", params)],
@@ -1039,6 +1086,9 @@ def _derive_legend_frame_fill(demos):
     For each non-bg color, flood-fill bg from the grid border. Any bg cells
     NOT reached are enclosed by that color's boundary. Fill them with a
     derived color (from a legend, or the boundary color itself).
+
+    Pre-computes legend_map and wall_colors from demo 0 so the executor
+    can skip auto-detection at test time.
     """
     if any(inp.shape != out.shape for inp, out in demos):
         return []
@@ -1049,11 +1099,20 @@ def _derive_legend_frame_fill(demos):
     if changed.sum() == 0:
         return []
 
-    # Verify using the actual executor semantics only. Older derive-side
-    # reconstruction peeked into demo outputs and could reject tasks that the
-    # emitted enclosed-fill executor would solve.
-    from aria.search.executor import _exec_legend_frame_fill
-    params = {'strategy': 'enclosed_fill'}
+    # --- Extract legend_map and wall_colors from demo 0 ---
+    from aria.search.executor import _extract_enclosed_fill_params, _exec_legend_frame_fill
+
+    extracted = _extract_enclosed_fill_params(inp0)
+    if extracted is None:
+        return []
+
+    legend_map, wall_colors = extracted
+    params = {
+        'strategy': 'enclosed_fill',
+        'legend_map': {int(k): int(v) for k, v in legend_map.items()},
+        'wall_colors': sorted(int(c) for c in wall_colors),
+    }
+
     for inp, out in demos:
         cand = _exec_legend_frame_fill(inp, params)
         if not np.array_equal(cand, out):

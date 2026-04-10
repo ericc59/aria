@@ -303,7 +303,10 @@ def _try_workspace_crop(demos, binding):
 # ---------------------------------------------------------------------------
 
 def _try_legend_chain_connect(demos, binding):
-    """Connect aligned workspace motifs following a bottom control-strip order."""
+    """Connect aligned workspace motifs following a bottom control-strip order.
+
+    Pre-computes bg from demo 0 so the executor can skip perceive at test time.
+    """
     from aria.guided.perceive import perceive
     from aria.search.executor import _exec_legend_chain_connect
 
@@ -314,7 +317,12 @@ def _try_legend_chain_connect(demos, binding):
     if any(inp.shape != out.shape for inp, out in demos):
         return []
 
-    params = {'control_side': 'bottom'}
+    # --- Pre-compute bg from demo 0 ---
+    inp0, _ = demos[0]
+    facts0 = perceive(inp0)
+    bg0 = int(facts0.bg)
+
+    params = {'control_side': 'bottom', 'bg': bg0}
     changed_any = False
     for inp, out in demos:
         facts = perceive(inp)

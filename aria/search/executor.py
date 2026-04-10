@@ -246,7 +246,7 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         grid = _child(node, 0, inp, ctx)
         if grid is None:
             return None
-        return _exec_cavity_transfer_auto(grid)
+        return _exec_cavity_transfer(grid, node.param or {})
 
     if op == Op.LEGEND_FRAME_FILL:
         grid = _child(node, 0, inp, ctx)
@@ -595,12 +595,11 @@ def _exec_anomaly_halo(grid, params):
     return result
 
 
-def _exec_cavity_transfer_auto(grid):
-    """Auto-detect concave hosts with markers and transfer them through openings.
+def _exec_cavity_transfer_auto_QUARANTINED(grid):
+    """QUARANTINED: monolithic auto-detect solver. Use _exec_cavity_transfer with
+    explicit pairs derived at search time instead.
 
-    Hosts are local 8-connected color groups, not global same-color unions.
-    The marker cavity defines an opening side inside the host bbox; markers
-    then exit toward the complementary tip side.
+    Kept for reference only — not called from any live code path.
     """
     from aria.guided.perceive import perceive
     from collections import defaultdict, deque
@@ -785,12 +784,14 @@ def _exec_cavity_transfer_auto(grid):
 
 
 def _exec_cavity_transfer(grid, params):
-    """Transfer marker cells from inside concave host to the opposite open end."""
-    from aria.guided.perceive import perceive
+    """Transfer marker cells from inside concave host to the opposite open end.
 
+    Params:
+        pairs: list of (marker_color, host_color, direction) tuples
+        bg: optional background color (derived from grid border if absent)
+    """
     pairs = params.get('pairs', [])
     if not pairs:
-        # Single-pair fallback
         mc = params.get('marker_color')
         hc = params.get('host_color')
         d = params.get('direction')
@@ -799,8 +800,10 @@ def _exec_cavity_transfer(grid, params):
         else:
             return grid
 
-    facts = perceive(grid)
-    bg = facts.bg
+    bg = params.get('bg')
+    if bg is None:
+        border = np.concatenate([grid[0], grid[-1], grid[1:-1, 0], grid[1:-1, -1]])
+        bg = int(np.bincount(border).argmax())
     h, w = grid.shape
     result = grid.copy()
 
@@ -861,10 +864,12 @@ def _exec_cavity_transfer(grid, params):
 def _exec_legend_frame_fill(grid, params):
     """Fill enclosed bg regions with derived colors.
 
-    For each non-bg color, finds bg cells enclosed by that color's boundary
-    (not reachable from the grid border via bg cells). If a legend/color_map
-    is provided, uses it. Otherwise derives fill color from the enclosed
-    cells' neighborhood.
+    Params (derived at search time for enclosed_fill strategy):
+        strategy: 'enclosed_fill' or 'color_map'
+        legend_map: dict mapping wall_color -> fill_color
+        wall_colors: list of wall color ints
+
+    Falls back to auto-detect if legend_map/wall_colors not provided.
     """
     from aria.guided.perceive import perceive
     from collections import deque
@@ -872,7 +877,12 @@ def _exec_legend_frame_fill(grid, params):
     strategy = params.get('strategy', 'color_map')
 
     if strategy == 'enclosed_fill':
-        return _exec_enclosed_fill(grid)
+        legend_map = params.get('legend_map')
+        wall_colors_list = params.get('wall_colors')
+        if legend_map is not None and wall_colors_list is not None:
+            return _exec_enclosed_fill_parameterized(grid, legend_map, set(wall_colors_list))
+        # Legacy fallback
+        return _exec_enclosed_fill_auto_QUARANTINED(grid)
 
     # Original color_map strategy
     color_map = params.get('color_map', {})
@@ -899,12 +909,13 @@ def _exec_legend_frame_fill(grid, params):
     return result
 
 
-def _exec_enclosed_fill(grid):
-    """Fill enclosed bg cells using a legend-derived color map.
+def _exec_enclosed_fill_parameterized(grid, legend_map, wall_colors):
+    """Fill enclosed bg regions using pre-computed legend_map and wall_colors.
 
-    1. Find enclosed bg regions for each wall color
-    2. Extract a color-pair legend from the input (small dense block)
-    3. Fill enclosed cells using the legend mapping
+    Args:
+        grid: input grid
+        legend_map: dict mapping wall_color -> fill_color (from derive)
+        wall_colors: set of wall colors that enclose bg regions
     """
     from aria.guided.perceive import perceive
     from collections import deque
@@ -936,7 +947,62 @@ def _exec_enclosed_fill(grid):
                     q.append((nr, nc))
         return ~reachable & (g == bg_val)
 
-    # Find colors that enclose bg regions AND form frame-like boundaries
+    # Normalize legend_map keys to int
+    lmap = {int(k): int(v) for k, v in legend_map.items()}
+    reverse_map = {v: k for k, v in lmap.items()}
+
+    result = grid.copy()
+    for wc in wall_colors:
+        wg = np.where(grid == wc, wc, bg)
+        enclosed = _flood_border(wg, bg)
+        if enclosed.sum() > 0:
+            if wc in lmap:
+                fill = lmap[wc]
+            elif wc in reverse_map:
+                fill = reverse_map[wc]
+            else:
+                fill = wc  # fallback
+            result[enclosed] = fill
+
+    return result
+
+
+def _exec_enclosed_fill_auto_QUARANTINED(grid):
+    """QUARANTINED: monolithic auto-detect enclosed fill. Use _exec_legend_frame_fill
+    with explicit legend_map/wall_colors derived at search time instead.
+
+    Kept for reference only -- not called from any live code path.
+    """
+    from aria.guided.perceive import perceive
+    from collections import deque
+
+    facts = perceive(grid)
+    bg = facts.bg
+    h, w = grid.shape
+
+    def _flood_border(g, bg_val):
+        gh, gw = g.shape
+        reachable = np.zeros((gh, gw), dtype=bool)
+        q = deque()
+        for r in range(gh):
+            for c in [0, gw - 1]:
+                if g[r, c] == bg_val and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        for c in range(gw):
+            for r in [0, gh - 1]:
+                if g[r, c] == bg_val and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        while q:
+            r, c = q.popleft()
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < gh and 0 <= nc < gw and not reachable[nr, nc] and g[nr, nc] == bg_val:
+                    reachable[nr, nc] = True
+                    q.append((nr, nc))
+        return ~reachable & (g == bg_val)
+
     from aria.guided.dsl import prim_find_frame
     non_bg_colors = set(int(grid[r, c]) for r in range(h) for c in range(w) if grid[r, c] != bg)
     wall_colors = set()
@@ -950,11 +1016,9 @@ def _exec_enclosed_fill(grid):
         if enc.sum() > 0:
             wall_colors.add(wc)
 
-    # Extract legend: scan for 2-row or 2-col dense rectangles with diverse colors
     legend_map = {}
     best_legend_size = 0
 
-    # Try 2-row blocks
     for r0 in range(h - 1):
         for c0 in range(w):
             for c1 in range(c0 + 2, min(c0 + 12, w + 1)):
@@ -972,7 +1036,6 @@ def _exec_enclosed_fill(grid):
                     legend_map = cand_map
                     best_legend_size = len(cand_map)
 
-    # Try 2-col blocks
     for c0 in range(w - 1):
         for r0 in range(h):
             for r1 in range(r0 + 2, min(r0 + 12, h + 1)):
@@ -990,15 +1053,12 @@ def _exec_enclosed_fill(grid):
                     legend_map = cand_map
                     best_legend_size = len(cand_map)
 
-    # Build reverse map too: value→key
     reverse_map = {v: k for k, v in legend_map.items()}
 
-    # Fill enclosed regions using legend (bidirectional lookup)
-    # Only fill colors that also form proper frames
     result = grid.copy()
     for wc in wall_colors:
         if wc not in frame_colors:
-            continue  # skip non-frame boundaries
+            continue
         wg = np.where(grid == wc, wc, bg)
         enclosed = _flood_border(wg, bg)
         if enclosed.sum() > 0:
@@ -1007,10 +1067,104 @@ def _exec_enclosed_fill(grid):
             elif wc in reverse_map:
                 fill = reverse_map[wc]
             else:
-                fill = wc  # fallback
+                fill = wc
             result[enclosed] = fill
 
     return result
+
+
+def _extract_enclosed_fill_params(grid):
+    """Extract legend_map and wall_colors from a grid for enclosed_fill.
+
+    Returns (legend_map, wall_colors) or None if extraction fails.
+    Used by derive to pre-compute params at search time.
+    """
+    from aria.guided.perceive import perceive
+    from aria.guided.dsl import prim_find_frame
+    from collections import deque
+
+    facts = perceive(grid)
+    bg = facts.bg
+    h, w = grid.shape
+
+    def _flood_border(g, bg_val):
+        gh, gw = g.shape
+        reachable = np.zeros((gh, gw), dtype=bool)
+        q = deque()
+        for r in range(gh):
+            for c in [0, gw - 1]:
+                if g[r, c] == bg_val and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        for c in range(gw):
+            for r in [0, gh - 1]:
+                if g[r, c] == bg_val and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        while q:
+            r, c = q.popleft()
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < gh and 0 <= nc < gw and not reachable[nr, nc] and g[nr, nc] == bg_val:
+                    reachable[nr, nc] = True
+                    q.append((nr, nc))
+        return ~reachable & (g == bg_val)
+
+    non_bg_colors = set(int(grid[r, c]) for r in range(h) for c in range(w) if grid[r, c] != bg)
+    wall_colors = set()
+    frame_colors = set()
+    for obj in facts.objects:
+        if prim_find_frame(obj, grid):
+            frame_colors.add(obj.color)
+    for wc in non_bg_colors:
+        wg = np.where(grid == wc, wc, bg)
+        enc = _flood_border(wg, bg)
+        if enc.sum() > 0:
+            wall_colors.add(wc)
+
+    # Only keep wall_colors that are also frame colors
+    wall_colors = wall_colors & frame_colors
+    if not wall_colors:
+        return None
+
+    legend_map = {}
+    best_legend_size = 0
+
+    for r0 in range(h - 1):
+        for c0 in range(w):
+            for c1 in range(c0 + 2, min(c0 + 12, w + 1)):
+                block = grid[r0:r0 + 2, c0:c1]
+                if np.any(block == bg):
+                    continue
+                nc = len(set(int(block[r, c]) for r in range(2) for c in range(c1 - c0)))
+                if nc < 3:
+                    continue
+                cand_map = {}
+                for c in range(c1 - c0):
+                    a, b = int(block[0, c]), int(block[1, c])
+                    cand_map[a] = b
+                if len(cand_map) > best_legend_size and any(k in wall_colors for k in cand_map):
+                    legend_map = cand_map
+                    best_legend_size = len(cand_map)
+
+    for c0 in range(w - 1):
+        for r0 in range(h):
+            for r1 in range(r0 + 2, min(r0 + 12, h + 1)):
+                block = grid[r0:r1, c0:c0 + 2]
+                if np.any(block == bg):
+                    continue
+                nc = len(set(int(block[r, c]) for r in range(r1 - r0) for c in range(2)))
+                if nc < 3:
+                    continue
+                cand_map = {}
+                for r in range(r1 - r0):
+                    a, b = int(block[r, 0]), int(block[r, 1])
+                    cand_map[a] = b
+                if len(cand_map) > best_legend_size and any(k in wall_colors for k in cand_map):
+                    legend_map = cand_map
+                    best_legend_size = len(cand_map)
+
+    return (legend_map, wall_colors)
 
 
 def _exec_cross_stencil_recolor(grid, params):
@@ -1526,15 +1680,11 @@ def _paint_periodic_runs(dest_len: int, runs: list[tuple[int, int]], dtype) -> n
     return dest
 
 
-def _exec_separator_motif_broadcast(grid: Grid, params: dict[str, Any]) -> Grid:
-    """Broadcast separator-side line motifs into the empty opposite side.
+def _exec_separator_motif_broadcast_auto_QUARANTINED(grid: Grid, params: dict[str, Any]) -> Grid:
+    """QUARANTINED: monolithic auto-detect solver. Use _exec_separator_motif_broadcast
+    with explicit sep_axis/sep_idx derived at search time instead.
 
-    For each orthogonal line, whichever side of the separator contains
-    non-background content becomes the source if the opposite side is empty.
-    Source runs are ordered from farthest-from-separator to nearest, then
-    painted into the destination using run length as the broadcast period.
-    Nearer runs overwrite farther ones, which captures the observed
-    separator-adjacent precedence.
+    Kept for reference only -- not called from any live code path.
     """
     from aria.guided.perceive import perceive
 
@@ -1559,6 +1709,60 @@ def _exec_separator_motif_broadcast(grid: Grid, params: dict[str, Any]) -> Grid:
         return grid.copy()
 
     sep_axis, sep_idx, _ = max(candidates, key=lambda item: (item[2], item[0] == "col"))
+    out = grid.copy()
+
+    if sep_axis == "col":
+        for r in range(grid.shape[0]):
+            left = grid[r, :sep_idx]
+            right = grid[r, sep_idx + 1:]
+            left_non = np.count_nonzero(left != bg)
+            right_non = np.count_nonzero(right != bg)
+            if left_non > 0 and right_non == 0:
+                run_order = _non_bg_runs(left, bg)
+                if run_order:
+                    out[r, sep_idx + 1:] = _paint_periodic_runs(len(right), run_order, grid.dtype)
+            elif right_non > 0 and left_non == 0:
+                run_order = list(reversed(_non_bg_runs(right, bg)))
+                if run_order:
+                    out[r, :sep_idx] = _paint_periodic_runs(len(left), run_order, grid.dtype)[::-1]
+        return out
+
+    for c in range(grid.shape[1]):
+        top = grid[:sep_idx, c]
+        bottom = grid[sep_idx + 1:, c]
+        top_non = np.count_nonzero(top != bg)
+        bottom_non = np.count_nonzero(bottom != bg)
+        if top_non > 0 and bottom_non == 0:
+            run_order = _non_bg_runs(top, bg)
+            if run_order:
+                out[sep_idx + 1:, c] = _paint_periodic_runs(len(bottom), run_order, grid.dtype)
+        elif bottom_non > 0 and top_non == 0:
+            run_order = list(reversed(_non_bg_runs(bottom, bg)))
+            if run_order:
+                out[:sep_idx, c] = _paint_periodic_runs(len(top), run_order, grid.dtype)[::-1]
+    return out
+
+
+def _exec_separator_motif_broadcast(grid: Grid, params: dict[str, Any]) -> Grid:
+    """Broadcast separator-side line motifs into the empty opposite side.
+
+    Params (derived at search time):
+        sep_axis: 'row' or 'col'
+        sep_idx: integer index of the separator line
+
+    Falls back to auto-detect if sep_axis/sep_idx not provided (legacy path).
+    """
+    from aria.guided.perceive import perceive
+
+    sep_axis = params.get("sep_axis")
+    sep_idx = params.get("sep_idx")
+
+    if sep_axis is None or sep_idx is None:
+        # Legacy fallback: auto-detect
+        return _exec_separator_motif_broadcast_auto_QUARANTINED(grid, params)
+
+    facts = perceive(grid)
+    bg = int(facts.bg)
     out = grid.copy()
 
     if sep_axis == "col":
@@ -1693,10 +1897,61 @@ def _exec_line_arith_broadcast(grid: Grid, params: dict[str, Any]) -> Grid:
     return _broadcast_axis(grid, axis)
 
 
-def _exec_barrier_port_transfer(grid: Grid, params: dict[str, Any]) -> Grid:
-    """Pack objects into barrier-adjacent port families and slide them through openings."""
-    from collections import defaultdict
+def _detect_barrier_params(grid: Grid) -> tuple[int, str, int] | None:
+    """Extract barrier_color, barrier_orient, bg from a grid.
 
+    Returns (barrier_color, barrier_orient, bg) or None if no barrier found.
+    Used by derive to pre-compute params at search time.
+    """
+    from scipy import ndimage
+
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
+
+    best: tuple[int, dict[str, Any]] | None = None
+    for color in sorted(int(v) for v in np.unique(grid) if v != 0):
+        labels, count = ndimage.label(grid == color, structure=structure)
+        for idx in range(1, count + 1):
+            coords = np.argwhere(labels == idx)
+            rs = coords[:, 0]
+            cs = coords[:, 1]
+            r0, r1 = int(rs.min()), int(rs.max())
+            c0, c1 = int(cs.min()), int(cs.max())
+            area = int(len(coords))
+            w = c1 - c0 + 1
+            h = r1 - r0 + 1
+            spans_w = c0 == 0 and c1 == grid.shape[1] - 1
+            spans_h = r0 == 0 and r1 == grid.shape[0] - 1
+            if not (spans_w or spans_h):
+                continue
+            orient = "horizontal" if spans_w and w >= h else "vertical"
+            if best is None or area > best[0]:
+                best = (area, {"color": color, "orient": orient})
+
+    if best is None:
+        return None
+
+    barrier_color = best[1]["color"]
+    barrier_orient = best[1]["orient"]
+
+    # Dominant bg: most frequent color excluding barrier
+    vals, counts = np.unique(grid, return_counts=True)
+    bg_candidates = [
+        (int(c), int(n))
+        for c, n in zip(vals, counts, strict=False)
+        if int(c) != barrier_color
+    ]
+    bg = max(bg_candidates, key=lambda item: item[1])[0] if bg_candidates else 0
+
+    return (barrier_color, barrier_orient, bg)
+
+
+def _exec_barrier_port_transfer_auto_QUARANTINED(grid: Grid, params: dict[str, Any]) -> Grid:
+    """QUARANTINED: monolithic auto-detect solver. Use _exec_barrier_port_transfer
+    with explicit barrier_color/barrier_orient/bg derived at search time instead.
+
+    Kept for reference only -- not called from any live code path.
+    """
+    from collections import defaultdict
     from scipy import ndimage
 
     structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
@@ -1746,6 +2001,99 @@ def _exec_barrier_port_transfer(grid: Grid, params: dict[str, Any]) -> Grid:
             if int(color) != barrier_color
         ]
         return max(candidates, key=lambda item: item[1])[0] if candidates else 0
+
+    barrier = _detect_barrier()
+    if barrier is None:
+        return grid
+    bg = _dominant_bg(int(barrier["color"]))
+    return _exec_barrier_port_transfer_core(grid, barrier, bg)
+
+
+def _exec_barrier_port_transfer(grid: Grid, params: dict[str, Any]) -> Grid:
+    """Pack objects into barrier-adjacent port families and slide them through openings.
+
+    Params (derived at search time):
+        barrier_color: int color of the barrier
+        barrier_orient: 'horizontal' or 'vertical'
+        bg: int background color
+
+    Falls back to auto-detect if params not provided (legacy path).
+    """
+    barrier_color = params.get("barrier_color")
+    barrier_orient = params.get("barrier_orient")
+    bg_param = params.get("bg")
+
+    if barrier_color is None or barrier_orient is None or bg_param is None:
+        # Legacy fallback: auto-detect
+        return _exec_barrier_port_transfer_auto_QUARANTINED(grid, params)
+
+    # Build barrier dict from pre-computed params + grid geometry
+    from scipy import ndimage
+
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
+    labels, count = ndimage.label(grid == barrier_color, structure=structure)
+
+    # Find the largest component of the barrier color
+    best_comp = None
+    best_area = 0
+    for idx in range(1, count + 1):
+        coords = np.argwhere(labels == idx)
+        if len(coords) > best_area:
+            best_area = len(coords)
+            rs = coords[:, 0]
+            cs = coords[:, 1]
+            mask = np.zeros((rs.max() - rs.min() + 1, cs.max() - cs.min() + 1), dtype=bool)
+            mask[rs - rs.min(), cs - cs.min()] = True
+            best_comp = {
+                "color": int(barrier_color),
+                "orient": barrier_orient,
+                "coords": [(int(r), int(c)) for r, c in coords],
+                "r0": int(rs.min()),
+                "r1": int(rs.max()),
+                "c0": int(cs.min()),
+                "c1": int(cs.max()),
+                "h": int(rs.max() - rs.min() + 1),
+                "w": int(cs.max() - cs.min() + 1),
+                "area": int(len(coords)),
+                "mask": mask,
+            }
+
+    if best_comp is None:
+        return grid
+
+    return _exec_barrier_port_transfer_core(grid, best_comp, int(bg_param))
+
+
+def _exec_barrier_port_transfer_core(grid: Grid, barrier: dict[str, Any], bg: int) -> Grid:
+    """Core barrier-port-transfer logic shared by parameterized and quarantined paths."""
+    from collections import defaultdict
+
+    from scipy import ndimage
+
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
+
+    def _components_of_color(color: int) -> list[dict[str, Any]]:
+        labels, count = ndimage.label(grid == color, structure=structure)
+        comps: list[dict[str, Any]] = []
+        for idx in range(1, count + 1):
+            coords = np.argwhere(labels == idx)
+            rs = coords[:, 0]
+            cs = coords[:, 1]
+            mask = np.zeros((rs.max() - rs.min() + 1, cs.max() - cs.min() + 1), dtype=bool)
+            mask[rs - rs.min(), cs - cs.min()] = True
+            comps.append({
+                "color": int(color),
+                "coords": [(int(r), int(c)) for r, c in coords],
+                "r0": int(rs.min()),
+                "r1": int(rs.max()),
+                "c0": int(cs.min()),
+                "c1": int(cs.max()),
+                "h": int(rs.max() - rs.min() + 1),
+                "w": int(cs.max() - cs.min() + 1),
+                "area": int(len(coords)),
+                "mask": mask,
+            })
+        return comps
 
     def _port_candidates(barrier: dict[str, Any], bg: int) -> list[dict[str, Any]]:
         r0, r1, c0, c1 = barrier["r0"], barrier["r1"], barrier["c0"], barrier["c1"]
@@ -1843,10 +2191,6 @@ def _exec_barrier_port_transfer(grid: Grid, params: dict[str, Any]) -> Grid:
             if (top + int(dr), left + int(dc)) in port["hole_cells"]
         )
 
-    barrier = _detect_barrier()
-    if barrier is None:
-        return grid
-    bg = _dominant_bg(int(barrier["color"]))
     ports = _port_candidates(barrier, bg)
     if not ports:
         return grid
