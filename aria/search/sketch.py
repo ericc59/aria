@@ -217,6 +217,13 @@ class SearchProgram:
             elif step.action == 'color_stencil':
                 from aria.search.derive import _exec_color_stencil
                 result = _exec_color_stencil(result, step.params or {})
+            elif step.action == 'crop_nonbg':
+                result = _exec_crop_nonbg(result)
+            elif step.action == 'crop_object':
+                result = _exec_crop_object(result, step.params or {})
+            elif step.action == 'crop_fixed':
+                p = step.params or {}
+                result = result[p['r0']:p['r0']+p['h'], p['c0']:p['c0']+p['w']]
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()
@@ -502,6 +509,10 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     if action == 'recolor_map':
         return ASTNode(Op.RECOLOR, [ASTNode(Op.INPUT)], param=p)
 
+    if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'recolor_map', 'color_stencil'):
+        # These ops don't lower to AST — executed directly in SearchProgram.execute
+        return ASTNode(Op.INPUT)
+
     raise ValueError(f"Unknown search action for AST lowering: {action}")
 
 
@@ -517,6 +528,39 @@ def _exec_recolor_map(grid, params):
             if v in color_map:
                 result[r, c] = color_map[v]
     return result
+
+
+def _exec_crop_nonbg(grid):
+    """Crop grid to tightest bounding box around non-bg cells."""
+    from aria.guided.perceive import perceive
+    facts = perceive(grid)
+    nonbg = np.argwhere(grid != facts.bg)
+    if len(nonbg) == 0:
+        return grid
+    r0, c0 = nonbg.min(axis=0)
+    r1, c1 = nonbg.max(axis=0)
+    return grid[r0:r1+1, c0:c1+1]
+
+
+def _exec_crop_object(grid, params):
+    """Crop grid to bounding box of an object matching a predicate."""
+    from aria.guided.perceive import perceive
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+    pred_name = params.get('predicate', 'largest')
+    _name_to_pred = {
+        'largest': Pred.IS_LARGEST, 'smallest': Pred.IS_SMALLEST,
+        'unique_color': Pred.UNIQUE_COLOR,
+    }
+    pred = _name_to_pred.get(pred_name)
+    if pred is None:
+        return grid
+    facts = perceive(grid)
+    selected = prim_select(facts, [Predicate(pred)])
+    if len(selected) != 1:
+        return grid
+    obj = selected[0]
+    return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
 
 
 def _exec_quadrant_template_decode(inp, step):

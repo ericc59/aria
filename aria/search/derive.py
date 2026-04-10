@@ -95,6 +95,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    # Strategy 0c: Direct subgrid crop (output = exact rectangle from input)
+    progs = _derive_direct_crop(demos)
+    if progs:
+        return progs
+
     # Compute transitions for all demos
     all_transitions = []
     all_facts = []
@@ -136,6 +141,102 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
 # ---------------------------------------------------------------------------
 # Strategy 1: Uniform transition
 # ---------------------------------------------------------------------------
+
+def _derive_direct_crop(demos):
+    """Derive programs where the output is an exact subgrid of the input.
+
+    Finds a consistent crop rule across all demos. Tries:
+    1. Fixed offset (same r0, c0 in every demo)
+    2. Object-anchored crop (output = bbox of an object matching a predicate)
+    3. Non-bg bounding box crop (output = tightest bbox around non-bg cells)
+    """
+    if not demos:
+        return []
+
+    # Check: all demos have output smaller than input
+    for inp, out in demos:
+        if out.shape[0] > inp.shape[0] or out.shape[1] > inp.shape[1]:
+            return []
+
+    # Try: non-bg bounding box crop (most common)
+    all_match_nonbg = True
+    for inp, out in demos:
+        from aria.guided.perceive import perceive
+        facts = perceive(inp)
+        bg = facts.bg
+        nonbg = np.argwhere(inp != bg)
+        if len(nonbg) == 0:
+            all_match_nonbg = False
+            break
+        r0, c0 = nonbg.min(axis=0)
+        r1, c1 = nonbg.max(axis=0)
+        crop = inp[r0:r1+1, c0:c1+1]
+        if not np.array_equal(crop, out):
+            all_match_nonbg = False
+            break
+
+    if all_match_nonbg:
+        prog = SearchProgram(
+            steps=[SearchStep('crop_nonbg', {})],
+            provenance='derive:crop_nonbg',
+        )
+        return [prog]
+
+    # Try: object bbox crop (output = bbox of largest/smallest/unique object)
+    from aria.guided.perceive import perceive
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    for pred, role in [(Pred.IS_LARGEST, 'largest'), (Pred.IS_SMALLEST, 'smallest'),
+                       (Pred.UNIQUE_COLOR, 'unique_color')]:
+        all_match = True
+        for inp, out in demos:
+            facts = perceive(inp)
+            selected = prim_select(facts, [Predicate(pred)])
+            if len(selected) != 1:
+                all_match = False
+                break
+            obj = selected[0]
+            crop = inp[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
+            if not np.array_equal(crop, out):
+                all_match = False
+                break
+
+        if all_match:
+            prog = SearchProgram(
+                steps=[SearchStep('crop_object', {'predicate': role})],
+                provenance=f'derive:crop_object_{role}',
+            )
+            return [prog]
+
+    # Try: fixed offset crop
+    oh, ow = demos[0][1].shape
+    offsets = set()
+    for inp, out in demos:
+        if out.shape != (oh, ow):
+            return []  # inconsistent output size
+        found = False
+        for r in range(inp.shape[0] - oh + 1):
+            for c in range(inp.shape[1] - ow + 1):
+                if np.array_equal(inp[r:r+oh, c:c+ow], out):
+                    offsets.add((r, c))
+                    found = True
+                    break
+            if found:
+                break
+        if not found:
+            return []
+
+    if len(offsets) == 1:
+        r0, c0 = next(iter(offsets))
+        prog = SearchProgram(
+            steps=[SearchStep('crop_fixed', {'r0': r0, 'c0': c0, 'h': oh, 'w': ow})],
+            provenance='derive:crop_fixed',
+        )
+        return [prog]
+
+    return []
+
 
 def _derive_color_stencil(demos):
     """Derive a per-color stencil stamp.
