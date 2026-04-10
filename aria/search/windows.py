@@ -852,14 +852,22 @@ def _solve_transfer(result, bg, bar_color, windows, sources, targets):
         axes_match = target_vertical == output_vertical
 
         if axes_match:
-            # Bar at target position — target bar becomes the new window's bar
+            # For single-slot (K>2) horizontal targets with bar=top,
+            # the target bar stays separate and the new window starts after it.
+            # All other cases: bar merges with the target.
+            separate_bar = (K is not None and K > 2 and out_side == "top")
+
             if out_side == "left":
                 anchor_r, anchor_c = tr0, tc0
             elif out_side == "right":
                 anchor_r = tr0
                 anchor_c = tc1 - iw
             elif out_side == "top":
-                anchor_r, anchor_c = tr0, tc0
+                if separate_bar:
+                    anchor_r = tr1 + 1
+                else:
+                    anchor_r = tr0
+                anchor_c = tc0
             else:
                 anchor_r = tr1 - ih
                 anchor_c = tc0
