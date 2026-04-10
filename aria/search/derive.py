@@ -85,8 +85,13 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
-    # Strategy 0: Global color map (simple substitution, no object analysis needed)
+    # Strategy 0a: Global color map (simple substitution)
     progs = _derive_color_map(demos)
+    if progs:
+        return progs
+
+    # Strategy 0b: Per-color stencil stamp (each colored cell gets a pattern)
+    progs = _derive_color_stencil(demos)
     if progs:
         return progs
 
@@ -131,6 +136,105 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
 # ---------------------------------------------------------------------------
 # Strategy 1: Uniform transition
 # ---------------------------------------------------------------------------
+
+def _derive_color_stencil(demos):
+    """Derive a per-color stencil stamp.
+
+    For each non-bg color in the input, extract the pattern that appears
+    around each cell of that color in the output. If the pattern is
+    consistent across all cells and all demos, emit a stencil_stamp program.
+    """
+    if not demos:
+        return []
+
+    inp0, out0 = demos[0]
+    if inp0.shape != out0.shape:
+        return []
+
+    # Detect bg
+    border = np.concatenate([inp0[0], inp0[-1], inp0[1:-1, 0], inp0[1:-1, -1]])
+    bg = int(np.bincount(border).argmax())
+
+    # Find non-bg colors
+    colors = sorted(set(int(inp0[r, c]) for r in range(inp0.shape[0])
+                        for c in range(inp0.shape[1]) if inp0[r, c] != bg))
+    if not colors:
+        return []
+
+    # For each color, extract the stencil pattern from demo 0.
+    # Try radii 1 then 2 (most ARC stencils are 3x3 or 5x5).
+    for radius in (1, 2):
+        stencils = _extract_stencils(inp0, out0, colors, bg, radius)
+        if stencils:
+            params = {'bg': bg, 'stencils': {str(c): {f"{dr},{dc}": v for (dr, dc), v in s.items()}
+                                              for c, s in stencils.items()}}
+            if all(np.array_equal(_exec_color_stencil(inp, params), out) for inp, out in demos):
+                return [SearchProgram(
+                    steps=[SearchStep('color_stencil', params)],
+                    provenance='derive:color_stencil',
+                )]
+
+    return []
+
+
+def _extract_stencils(inp, out, colors, bg, radius):
+    """Extract per-color stencil patterns at given radius."""
+    stencils = {}
+    for color in colors:
+        pattern = {}
+        cells = [(r, c) for r in range(inp.shape[0]) for c in range(inp.shape[1])
+                 if inp[r, c] == color]
+        if not cells:
+            continue
+
+        for r, c in cells:
+            for dr in range(-radius, radius + 1):
+                for dc in range(-radius, radius + 1):
+                    if dr == 0 and dc == 0:
+                        continue
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < out.shape[0] and 0 <= nc < out.shape[1]:
+                        ov = int(out[nr, nc])
+                        iv = int(inp[nr, nc])
+                        if ov != iv and iv == bg:
+                            key = (dr, dc)
+                            if key in pattern:
+                                if pattern[key] != ov:
+                                    pattern = None
+                                    break
+                            else:
+                                pattern[key] = ov
+                if pattern is None:
+                    break
+
+            if pattern is None:
+                break
+
+        if pattern:
+            stencils[color] = pattern
+
+    return stencils
+
+
+def _exec_color_stencil(grid, params):
+    """Apply per-color stencil patterns to a grid."""
+    bg = params.get('bg', 0)
+    stencils = params.get('stencils', {})
+    result = grid.copy()
+    h, w = grid.shape
+
+    for color_str, pattern in stencils.items():
+        color = int(color_str)
+        cells = [(r, c) for r in range(h) for c in range(w) if grid[r, c] == color]
+        for r, c in cells:
+            for key, fill_color in pattern.items():
+                dr, dc = map(int, key.split(','))
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and result[nr, nc] == bg:
+                    result[nr, nc] = fill_color
+
+    return result
+
 
 def _derive_color_map(demos):
     """Derive a global color substitution map.

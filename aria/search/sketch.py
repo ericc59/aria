@@ -214,6 +214,9 @@ class SearchProgram:
                 result = _exec_cavity_transfer(result, step.params or {})
             elif step.action == 'recolor_map':
                 result = _exec_recolor_map(result, step.params or {})
+            elif step.action == 'color_stencil':
+                from aria.search.derive import _exec_color_stencil
+                result = _exec_color_stencil(result, step.params or {})
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()
