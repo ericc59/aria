@@ -557,9 +557,26 @@ def _exec_crop_object(grid, params):
     _name_to_pred = {
         'largest': Pred.IS_LARGEST, 'smallest': Pred.IS_SMALLEST,
         'unique_color': Pred.UNIQUE_COLOR,
+        'topmost': Pred.IS_TOPMOST, 'bottommost': Pred.IS_BOTTOMMOST,
+        'leftmost': Pred.IS_LEFTMOST, 'rightmost': Pred.IS_RIGHTMOST,
+        'interior': Pred.NOT_TOUCHES_BORDER,
+        'touches_border': Pred.TOUCHES_BORDER,
     }
     pred = _name_to_pred.get(pred_name)
     if pred is None:
+        # Try color_N format
+        if pred_name.startswith('color_'):
+            try:
+                color = int(pred_name.split('_')[1])
+                pred = Pred.COLOR_EQ
+                facts = perceive(grid)
+                selected = prim_select(facts, [Predicate(pred, color)])
+                if len(selected) != 1:
+                    return grid
+                obj = selected[0]
+                return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
+            except (ValueError, IndexError):
+                pass
         return grid
     facts = perceive(grid)
     selected = prim_select(facts, [Predicate(pred)])

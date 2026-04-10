@@ -246,7 +246,11 @@ def _derive_direct_crop(demos):
     from aria.guided.clause import Predicate, Pred
 
     for pred, role in [(Pred.IS_LARGEST, 'largest'), (Pred.IS_SMALLEST, 'smallest'),
-                       (Pred.UNIQUE_COLOR, 'unique_color')]:
+                       (Pred.UNIQUE_COLOR, 'unique_color'),
+                       (Pred.IS_TOPMOST, 'topmost'), (Pred.IS_BOTTOMMOST, 'bottommost'),
+                       (Pred.IS_LEFTMOST, 'leftmost'), (Pred.IS_RIGHTMOST, 'rightmost'),
+                       (Pred.NOT_TOUCHES_BORDER, 'interior'),
+                       (Pred.TOUCHES_BORDER, 'touches_border')]:
         all_match = True
         for inp, out in demos:
             facts = perceive(inp)
@@ -266,6 +270,27 @@ def _derive_direct_crop(demos):
                 provenance=f'derive:crop_object_{role}',
             )
             return [prog]
+
+    # Try: color-based crop (output = bbox of unique object of a specific color)
+    inp0_facts = perceive(demos[0][0])
+    for color in sorted(set(o.color for o in inp0_facts.objects)):
+        all_match = True
+        for inp, out in demos:
+            facts = perceive(inp)
+            selected = prim_select(facts, [Predicate(Pred.COLOR_EQ, color)])
+            if len(selected) != 1:
+                all_match = False
+                break
+            obj = selected[0]
+            crop = inp[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
+            if not np.array_equal(crop, out):
+                all_match = False
+                break
+        if all_match:
+            return [SearchProgram(
+                steps=[SearchStep('crop_object', {'predicate': f'color_{color}'})],
+                provenance=f'derive:crop_object_color_{color}',
+            )]
 
     # Try: fixed offset crop
     oh, ow = demos[0][1].shape
