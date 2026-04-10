@@ -36,6 +36,15 @@ class MovableModule:
     anchored: bool
 
 
+@dataclass(frozen=True)
+class RegistrationCandidate:
+    shift_row: int
+    shift_col: int
+    target_site: tuple[int, int]
+    source_anchor: tuple[int, int]
+    canvas: np.ndarray
+
+
 def extract_anchored_shapes(
     grid: Grid,
     *,
@@ -136,3 +145,105 @@ def cluster_movable_modules(
     ]
     modules.sort(key=lambda module: min(shapes[idx].row for idx in module.component_indices))
     return base_index, modules
+
+
+def module_anchor_patch(
+    grid: Grid,
+    shapes: list[AnchoredShape],
+    module: MovableModule,
+    *,
+    shape_color: int,
+    anchor_color: int,
+) -> tuple[np.ndarray, np.ndarray, tuple[tuple[int, int], ...]]:
+    """Return an anchor-inclusive module patch plus paint mask and source anchors."""
+    idxs = module.component_indices
+    rows = [shapes[i].row for i in idxs]
+    cols = [shapes[i].col for i in idxs]
+    bottoms = [shapes[i].row + shapes[i].height - 1 for i in idxs]
+    rights = [shapes[i].col + shapes[i].width - 1 for i in idxs]
+    anchor_rows = [ar for i in idxs for ar, _ in shapes[i].anchors_global]
+    anchor_cols = [ac for i in idxs for _, ac in shapes[i].anchors_global]
+    r0 = min(rows + anchor_rows)
+    c0 = min(cols + anchor_cols)
+    r1 = max(bottoms + anchor_rows)
+    c1 = max(rights + anchor_cols)
+    patch = grid[r0:r1 + 1, c0:c1 + 1].copy()
+    mask = (patch == shape_color) | (patch == anchor_color)
+    source_anchors = tuple(
+        sorted({(ar - r0, ac - c0) for i in idxs for ar, ac in shapes[i].anchors_global})
+    )
+    return patch, mask, source_anchors
+
+
+def base_registration_patch(
+    base: AnchoredShape,
+    *,
+    shape_color: int,
+) -> tuple[np.ndarray, tuple[tuple[int, int], ...]]:
+    """Normalize the base patch and enumerate candidate attachment sites."""
+    patch = base.patch.copy()
+    sites: list[tuple[int, int]] = []
+    for ar, ac in base.anchors_global:
+        lr, lc = ar - base.row, ac - base.col
+        if 0 <= lr < base.height and 0 <= lc < base.width:
+            sites.append((lr, lc))
+            patch[lr, lc] = shape_color
+        else:
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = lr + dr, lc + dc
+                if 0 <= nr < base.height and 0 <= nc < base.width and patch[nr, nc] == shape_color:
+                    sites.append((nr, nc))
+    expanded: list[tuple[int, int]] = []
+    for lr, lc in sites:
+        if (lr, lc) not in expanded:
+            expanded.append((lr, lc))
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = lr + dr, lc + dc
+            if 0 <= nr < base.height and 0 <= nc < base.width and patch[nr, nc] == shape_color and (nr, nc) not in expanded:
+                expanded.append((nr, nc))
+    return patch, tuple(expanded)
+
+
+def overlay_registration_candidates(
+    base_patch: np.ndarray,
+    target_sites: tuple[tuple[int, int], ...],
+    module_patch: np.ndarray,
+    module_mask: np.ndarray,
+    source_anchors: tuple[tuple[int, int], ...],
+    *,
+    bg_color: int,
+    shape_color: int,
+    anchor_color: int,
+) -> list[RegistrationCandidate]:
+    """Enumerate anchored overlay candidates with tight non-background crops."""
+    normalized_module = module_patch.copy()
+    normalized_module[normalized_module == anchor_color] = shape_color
+    candidates: list[RegistrationCandidate] = []
+    for target_site in target_sites:
+        for source_anchor in source_anchors:
+            shift_row = int(target_site[0] - source_anchor[0])
+            shift_col = int(target_site[1] - source_anchor[1])
+            min_r = min(0, shift_row)
+            min_c = min(0, shift_col)
+            max_r = max(base_patch.shape[0], shift_row + normalized_module.shape[0])
+            max_c = max(base_patch.shape[1], shift_col + normalized_module.shape[1])
+            canvas = np.full((max_r - min_r, max_c - min_c), bg_color, dtype=base_patch.dtype)
+            ro = -min_r
+            co = -min_c
+            base_mask = base_patch != bg_color
+            canvas[ro:ro + base_patch.shape[0], co:co + base_patch.shape[1]][base_mask] = base_patch[base_mask]
+            rr = shift_row + ro
+            cc = shift_col + co
+            canvas[rr:rr + normalized_module.shape[0], cc:cc + normalized_module.shape[1]][module_mask] = normalized_module[module_mask]
+            nz = np.argwhere(canvas != bg_color)
+            cropped = canvas[nz[:, 0].min():nz[:, 0].max() + 1, nz[:, 1].min():nz[:, 1].max() + 1]
+            candidates.append(
+                RegistrationCandidate(
+                    shift_row=shift_row,
+                    shift_col=shift_col,
+                    target_site=target_site,
+                    source_anchor=source_anchor,
+                    canvas=cropped,
+                )
+            )
+    return candidates

@@ -7,6 +7,7 @@
 - refactored `frame_bbox_pack` to use explicit rectangular item extraction (hollow frames + solid blocks) instead of the older object/frame heuristic
 - extended `frame_bbox_pack` with family-side lane packing for G07: same-color rectangular families now get overlap-aware column clustering and side placement without a new task op
 - added `registration.py` substrate for anchor-conditioned transfer tasks: anchored shape extraction and movable-module clustering now expose the missing representation behind `20270e3b`
+- extended `registration.py` with base target-site enumeration and exact anchored overlay candidate generation; `20270e3b` now has a clean search space over plausible module placements instead of hand analysis
 
 ## 2026-04-09
 
