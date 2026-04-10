@@ -16,6 +16,21 @@ from aria.types import Grid
 from aria.search.ast import ASTNode, Op
 
 
+def _select_targets(sel, facts):
+    """Resolve a selector to objects. Handles both Predicate lists and StepSelects.
+
+    StepSelect('by_rule') stays at the search level (selection_facts.py).
+    Predicate lists go through guided/dsl.prim_select as before.
+    """
+    from aria.search.sketch import StepSelect
+    if isinstance(sel, StepSelect):
+        return sel.select_objects(facts)
+    if sel is not None:
+        from aria.guided.dsl import prim_select
+        return prim_select(facts, sel)
+    return list(facts.objects)
+
+
 def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
     """Execute an AST node against an input grid.
 
@@ -305,14 +320,13 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         return _exec_gravity(node, inp, ctx)
 
     if op == Op.SLIDE:
-        from aria.guided.dsl import prim_select
         from aria.guided.perceive import perceive
         grid = _child(node, 0, inp, ctx)
         if grid is None:
             return None
         sel_preds, direction = node.param
         facts = perceive(grid)
-        targets = prim_select(facts, sel_preds)
+        targets = _select_targets(sel_preds, facts)
         result = grid.copy()
         rows, cols = grid.shape
         dr, dc = {'up': (-1,0), 'down': (1,0), 'left': (0,-1), 'right': (0,1)}.get(direction, (0,0))
@@ -344,14 +358,13 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         return result
 
     if op == Op.STAMP:
-        from aria.guided.dsl import prim_select
         from aria.guided.perceive import perceive
         grid = _child(node, 0, inp, ctx)
         if grid is None:
             return None
         sel_preds, sdr, sdc = node.param
         facts = perceive(grid)
-        targets = prim_select(facts, sel_preds)
+        targets = _select_targets(sel_preds, facts)
         result = grid.copy()
         for obj in targets:
             nr, nc = obj.row + sdr, obj.col + sdc
@@ -364,14 +377,13 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         return result
 
     if op == Op.TRANSFORM_OBJ:
-        from aria.guided.dsl import prim_select
         from aria.guided.perceive import perceive
         grid = _child(node, 0, inp, ctx)
         if grid is None:
             return None
         sel_preds, xform_name = node.param
         facts = perceive(grid)
-        targets = prim_select(facts, sel_preds)
+        targets = _select_targets(sel_preds, facts)
         result = grid.copy()
         for obj in targets:
             for r in range(obj.height):
@@ -390,7 +402,7 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         return result
 
     if op == Op.FILL_INTERIOR:
-        from aria.guided.dsl import prim_select, prim_find_frame
+        from aria.guided.dsl import prim_find_frame
         from aria.guided.perceive import perceive
         grid = _child(node, 0, inp, ctx)
         if grid is None:
@@ -398,7 +410,7 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         sel_preds, fill_color = node.param
         facts = perceive(grid)
         result = grid.copy()
-        for obj in prim_select(facts, sel_preds):
+        for obj in _select_targets(sel_preds, facts):
             frame = prim_find_frame(obj, grid)
             if frame and hasattr(frame, 'interior_mask'):
                 for r, c in zip(*np.where(frame.interior_mask)):
@@ -628,7 +640,6 @@ def _exec_symmetry_repair(grid, damage_color):
 
 
 def _exec_recolor(node, inp, ctx):
-    from aria.guided.dsl import prim_select
     from aria.guided.perceive import perceive
     grid = _child(node, 0, inp, ctx)
     if grid is None:
@@ -636,7 +647,7 @@ def _exec_recolor(node, inp, ctx):
     facts = perceive(grid)
     sel_preds, new_color = node.param
     result = grid.copy()
-    for obj in prim_select(facts, sel_preds):
+    for obj in _select_targets(sel_preds, facts):
         for r in range(obj.height):
             for c in range(obj.width):
                 if obj.mask[r, c]:
@@ -678,7 +689,6 @@ def _exec_template_broadcast(grid, params):
 
 
 def _exec_remove(node, inp, ctx):
-    from aria.guided.dsl import prim_select
     from aria.guided.perceive import perceive
     grid = _child(node, 0, inp, ctx)
     if grid is None:
@@ -694,7 +704,7 @@ def _exec_remove(node, inp, ctx):
     facts = perceive(grid)
     bg = bg_override if bg_override is not None else facts.bg
     result = grid.copy()
-    for obj in prim_select(facts, sel_preds):
+    for obj in _select_targets(sel_preds, facts):
         for r in range(obj.height):
             for c in range(obj.width):
                 if obj.mask[r, c]:
@@ -703,7 +713,6 @@ def _exec_remove(node, inp, ctx):
 
 
 def _exec_move(node, inp, ctx):
-    from aria.guided.dsl import prim_select
     from aria.guided.perceive import perceive
     grid = _child(node, 0, inp, ctx)
     if grid is None:
@@ -712,7 +721,7 @@ def _exec_move(node, inp, ctx):
     sel_preds, dr, dc = node.param
     result = grid.copy()
     rows, cols = grid.shape
-    targets = prim_select(facts, sel_preds)
+    targets = _select_targets(sel_preds, facts)
     for obj in targets:
         for r in range(obj.height):
             for c in range(obj.width):
@@ -729,7 +738,6 @@ def _exec_move(node, inp, ctx):
 
 
 def _exec_gravity(node, inp, ctx):
-    from aria.guided.dsl import prim_select
     from aria.guided.perceive import perceive
     grid = _child(node, 0, inp, ctx)
     if grid is None:
@@ -738,7 +746,7 @@ def _exec_gravity(node, inp, ctx):
     sel_preds, direction = node.param
     result = grid.copy()
     rows, cols = grid.shape
-    targets = prim_select(facts, sel_preds)
+    targets = _select_targets(sel_preds, facts)
     for obj in targets:
         for r in range(obj.height):
             for c in range(obj.width):

@@ -96,9 +96,22 @@ class StepSelect:
             return [Predicate(Pred.SIZE_GT, 0)]
         if role == 'by_predicate':
             return self.params.get('predicates', [])
-        if role == 'by_rule':
-            return [Predicate(Pred.SELECTION_RULE, self.params.get('rule', {}))]
+        # by_rule is NOT routed through to_predicates — it stays at the
+        # search level and is resolved by select_objects() directly.
         return []
+
+    def select_objects(self, facts) -> list:
+        """Search-level object selection. Handles rule-based selectors.
+
+        Rule-based selectors stay in the search layer (selection_facts.py)
+        and never touch guided/clause.py predicates.
+        """
+        if self.role == 'by_rule':
+            from aria.search.selection_facts import select_by_rule
+            return select_by_rule(self.params.get('rule', {}), facts)
+        from aria.guided.dsl import prim_select
+        preds = self.to_predicates()
+        return prim_select(facts, preds) if preds else list(facts.objects)
 
 
 # ---------------------------------------------------------------------------
@@ -258,14 +271,12 @@ class SearchProgram:
 def _exec_gravity_nearest(inp, step):
     """Per-object gravity: each object moves to nearest border along axis."""
     from aria.guided.perceive import perceive
-    from aria.guided.dsl import prim_select
 
     facts = perceive(inp)
     bg = facts.bg
     axis = step.params.get('axis', 'vertical')
-    sel_preds = step.select.to_predicates() if step.select else None
 
-    targets = prim_select(facts, sel_preds) if sel_preds else facts.objects
+    targets = step.select.select_objects(facts) if step.select else facts.objects
     rows, cols = inp.shape
     result = inp.copy()
 
@@ -302,14 +313,12 @@ def _exec_gravity_nearest(inp, step):
 def _exec_slide(inp, step):
     """Per-object slide: each object slides in direction until collision."""
     from aria.guided.perceive import perceive
-    from aria.guided.dsl import prim_select
 
     facts = perceive(inp)
     bg = facts.bg
     direction = step.params.get('direction', 'down')
-    sel_preds = step.select.to_predicates() if step.select else None
 
-    targets = prim_select(facts, sel_preds) if sel_preds else facts.objects
+    targets = step.select.select_objects(facts) if step.select else facts.objects
     rows, cols = inp.shape
     result = inp.copy()
 
@@ -385,7 +394,12 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     """Convert a SearchStep to an ASTNode."""
     action = step.action
     p = step.params
-    sel_preds = step.select.to_predicates() if step.select else None
+    # Rule-based selectors stay as StepSelect objects (resolved at the
+    # search execution level); predicate-based selectors lower to Pred lists.
+    if step.select and step.select.role == 'by_rule':
+        sel_preds = step.select
+    else:
+        sel_preds = step.select.to_predicates() if step.select else None
 
     # --- Grid-level transforms ---
     _xform_map = {

@@ -195,9 +195,8 @@ def test_find_selector_cross_demo():
 
 
 def test_by_rule_round_trip():
-    """by_rule selector should survive to_dict / from_dict / to_predicates."""
+    """by_rule selector should survive to_dict / from_dict / select_objects."""
     from aria.search.sketch import StepSelect
-    from aria.guided.clause import Predicate, Pred
 
     rule_dict = {
         'kind': 'dnf',
@@ -214,7 +213,21 @@ def test_by_rule_round_trip():
     assert sel2.role == 'by_rule'
     assert sel2.params['rule'] == rule_dict
 
-    # to_predicates should return SELECTION_RULE predicate
+    # to_predicates should return empty (rule-based stays at search level)
     preds = sel2.to_predicates()
-    assert len(preds) == 1
-    assert preds[0].pred == Pred.SELECTION_RULE
+    assert preds == []
+
+    # select_objects should work end-to-end
+    grid = np.zeros((10, 10), dtype=np.int8)
+    grid[3:5, 3:5] = 2    # rectangular, interior
+    grid[0:2, 0:2] = 3    # rectangular, touches border
+    grid[6, 6] = 4        # singleton, interior
+
+    facts = perceive(grid)
+    selected = sel2.select_objects(facts)
+
+    # Should select objects that are rectangular AND interior
+    for obj in selected:
+        touches = (obj.touches_top or obj.touches_bottom
+                   or obj.touches_left or obj.touches_right)
+        assert obj.is_rectangular and not touches
