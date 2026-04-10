@@ -107,6 +107,10 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     progs = _derive_dispatch(all_transitions, all_facts, demos)
     results.extend(progs)
 
+    # Strategy 2b: Conditional dispatch (same action type, different params per predicate group)
+    progs = _derive_conditional_dispatch(all_transitions, all_facts, demos)
+    results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -528,6 +532,219 @@ def _derive_dispatch(all_transitions, all_facts, demos):
             results.append(prog)
 
     return results
+
+
+def _derive_conditional_dispatch(all_transitions, all_facts, demos):
+    """Objects split into predicate-selected groups, each getting its own action.
+
+    Unlike _derive_dispatch (groups by match_type), this finds cases where
+    objects of the SAME match_type get different params based on a property.
+    Example: 'color-2 objects move down, color-4 objects move up'.
+
+    Strategy:
+    1. In demo 0: group objects by a candidate selector
+    2. For each group: derive a uniform action (recolor/move/remove/transform)
+    3. Verify the program on all demos
+    """
+    results = []
+
+    changed_0 = [t for t in all_transitions[0] if t.match_type != 'identical']
+    if len(changed_0) < 2:
+        return []
+
+    # Collect all candidate selectors that partition the changed objects
+    all_oids = set(t.in_obj.oid for t in changed_0 if t.in_obj)
+    if len(all_oids) < 2:
+        return []
+
+    # Try grouping by color (most common conditional)
+    color_groups = defaultdict(set)
+    for t in changed_0:
+        if t.in_obj:
+            color_groups[t.in_obj.color].add(t.in_obj.oid)
+
+    for partition in _candidate_partitions(changed_0, all_facts[0]):
+        steps = []
+        ok = True
+        for sel, group_oids in partition:
+            # Find what action this group does uniformly in demo 0
+            group_trans = [t for t in changed_0 if t.in_obj and t.in_obj.oid in group_oids]
+            step = _derive_group_step(group_trans, sel, all_transitions, all_facts, demos)
+            if step is None:
+                ok = False
+                break
+            steps.append(step)
+
+        if not ok or len(steps) < 2:
+            continue
+
+        prog = SearchProgram(steps=steps, provenance='derive:conditional_dispatch')
+        if prog.verify(demos):
+            results.append(prog)
+            return results  # first valid is enough
+
+    return results
+
+
+def _candidate_partitions(changed_transitions, facts):
+    """Generate candidate (selector, oid_set) partitions of changed objects."""
+    from aria.guided.clause import Predicate, Pred
+
+    # By color
+    color_groups = defaultdict(set)
+    for t in changed_transitions:
+        if t.in_obj:
+            color_groups[t.in_obj.color].add(t.in_obj.oid)
+    if len(color_groups) >= 2:
+        partition = []
+        for c, oids in sorted(color_groups.items()):
+            sel = StepSelect('by_color', {'color': c})
+            partition.append((sel, oids))
+        yield partition
+
+    # By structural predicate pairs (e.g., largest vs rest)
+    _pred_pairs = [
+        (Pred.IS_LARGEST, Pred.NOT),
+        (Pred.IS_SMALLEST, Pred.NOT),
+        (Pred.TOUCHES_BORDER, Pred.NOT_TOUCHES_BORDER),
+        (Pred.IS_RECTANGULAR, Pred.NOT),
+        (Pred.IS_SINGLETON, Pred.NOT),
+    ]
+    all_oids = set(t.in_obj.oid for t in changed_transitions if t.in_obj)
+    from aria.guided.dsl import prim_select
+
+    for pos_pred, neg_pred in _pred_pairs:
+        pos_preds = [Predicate(pos_pred)]
+        pos_oids = set(o.oid for o in prim_select(facts, pos_preds))
+        pos_in_changed = pos_oids & all_oids
+        neg_in_changed = all_oids - pos_in_changed
+
+        if pos_in_changed and neg_in_changed:
+            if neg_pred == Pred.NOT:
+                neg_sel = StepSelect('by_predicate', {'predicates': [Predicate(Pred.NOT, Predicate(pos_pred))]})
+            else:
+                neg_sel = StepSelect('by_predicate', {'predicates': [Predicate(neg_pred)]})
+
+            # Map pos_pred to role name
+            _pred_to_role = {
+                Pred.IS_LARGEST: 'largest', Pred.IS_SMALLEST: 'smallest',
+                Pred.TOUCHES_BORDER: 'touches_border',
+                Pred.IS_RECTANGULAR: 'rectangular', Pred.IS_SINGLETON: 'singleton',
+            }
+            pos_sel = StepSelect(_pred_to_role.get(pos_pred, 'by_predicate'),
+                                 {} if pos_pred in _pred_to_role else {'predicates': pos_preds})
+            yield [(pos_sel, pos_in_changed), (neg_sel, neg_in_changed)]
+
+
+def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos):
+    """Derive a single SearchStep for a group of objects that share a selector.
+
+    Checks that the same action holds across all demos for objects matching sel.
+    """
+    if not group_trans:
+        return None
+
+    mtypes = set(t.match_type for t in group_trans)
+    if len(mtypes) != 1:
+        return None
+    mtype = next(iter(mtypes))
+
+    if mtype == 'removed':
+        return SearchStep('remove', {}, sel)
+
+    if mtype == 'recolored':
+        colors = set(t.color_to for t in group_trans)
+        if len(colors) == 1:
+            return SearchStep('recolor', {'color': next(iter(colors))}, sel)
+        return None
+
+    if mtype == 'moved':
+        offsets = set((t.dr, t.dc) for t in group_trans)
+        if len(offsets) == 1:
+            dr, dc = next(iter(offsets))
+            return SearchStep('move', {'dr': dr, 'dc': dc}, sel)
+        # Try gravity
+        rows, cols = demos[0][0].shape
+        gdir = _detect_gravity(group_trans, rows, cols)
+        if gdir:
+            return SearchStep('gravity', {'direction': gdir}, sel)
+        return None
+
+    if mtype == 'transformed':
+        xforms = set(t.transform for t in group_trans if t.transform)
+        if len(xforms) == 1:
+            return SearchStep('transform', {'xform': next(iter(xforms))}, sel)
+        return None
+
+    return None
+
+
+def _resolve_selector(sel, facts):
+    """Resolve a StepSelect to a set of object IDs."""
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    if sel.role == 'by_color':
+        color = sel.params.get('color')
+        preds = [Predicate(Pred.COLOR_EQ, color)]
+        return set(o.oid for o in prim_select(facts, preds))
+
+    # Map role names to predicates
+    _role_to_pred = {
+        'largest': Pred.IS_LARGEST,
+        'smallest': Pred.IS_SMALLEST,
+        'unique_color': Pred.UNIQUE_COLOR,
+        'singleton': Pred.IS_SINGLETON,
+        'rectangular': Pred.IS_RECTANGULAR,
+        'line': Pred.IS_LINE,
+        'topmost': Pred.IS_TOPMOST,
+        'bottommost': Pred.IS_BOTTOMMOST,
+        'leftmost': Pred.IS_LEFTMOST,
+        'rightmost': Pred.IS_RIGHTMOST,
+        'touches_border': Pred.TOUCHES_BORDER,
+        'interior': Pred.NOT_TOUCHES_BORDER,
+    }
+    if sel.role in _role_to_pred:
+        preds = [Predicate(_role_to_pred[sel.role])]
+        return set(o.oid for o in prim_select(facts, preds))
+
+    if sel.role == 'all':
+        return set(o.oid for o in facts.objects)
+
+    return None
+
+
+def _transition_action_key(t):
+    """Extract a hashable (match_type, param_key) for grouping transitions."""
+    if t.match_type == 'recolored':
+        return ('recolored', t.color_to)
+    if t.match_type == 'moved':
+        return ('moved', (t.dr, t.dc))
+    if t.match_type == 'removed':
+        return ('removed', None)
+    if t.match_type == 'transformed':
+        return ('transformed', t.transform)
+    if t.match_type == 'moved_recolored':
+        return ('moved_recolored', (t.dr, t.dc, t.color_to))
+    return None
+
+
+def _action_step_from_key(mtype, param_key, sel):
+    """Build a SearchStep from an action key."""
+    if mtype == 'recolored':
+        return SearchStep('recolor', {'color': param_key}, sel)
+    if mtype == 'moved':
+        dr, dc = param_key
+        return SearchStep('move', {'dr': dr, 'dc': dc}, sel)
+    if mtype == 'removed':
+        return SearchStep('remove', {}, sel)
+    if mtype == 'transformed':
+        return SearchStep('transform', {'xform': param_key}, sel)
+    if mtype == 'moved_recolored':
+        dr, dc, color = param_key
+        return SearchStep('move', {'dr': dr, 'dc': dc}, sel)
+        # NOTE: recolor step would need to be added separately
+    return None
 
 
 # ---------------------------------------------------------------------------
