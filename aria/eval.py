@@ -1,10 +1,9 @@
-"""Evaluation harness for running the current guided+search solver.
+"""Evaluation harness for running the current search-only solver.
 
 This module is the bridge from dataset iteration/reporting to the newer
 ``aria.solve.solve_task`` entrypoint. It keeps the persisted report shape
 roughly stable while routing evaluation through the canonical
-``guided -> aria/search`` path instead of the older offline/refinement
-solver stack.
+``aria/search`` path instead of the older guided/offline solver stacks.
 """
 
 from __future__ import annotations
@@ -29,12 +28,12 @@ class EvalConfig:
 
     Most historical refinement/retrieval fields are kept for CLI/report
     compatibility, but the active eval path now uses ``time_budget_sec`` and
-    the canonical ``aria.solve`` entrypoint.
+    the canonical search-only ``aria.solve`` entrypoint.
     """
 
     retrieval_limit: int = 0
     max_search_steps: int = 3
-    max_search_candidates: int = 20000
+    max_search_candidates: int = 5000
     max_refinement_rounds: int = 2
     include_core_ops: bool = True
     beam_width: int = 0
@@ -87,7 +86,7 @@ def evaluate_task(
         time_budget=config.time_budget_sec,
     )
     elapsed = time.time() - t0
-    del trace_store, freeze_stores, library, program_store
+    del freeze_stores, library, program_store
 
     outcome: dict[str, Any] = {
         "task_id": task_id,
@@ -119,12 +118,25 @@ def evaluate_task(
             test_results.append({"test_idx": idx, "correct": correct})
         outcome["test_results"] = test_results
         outcome["library_ops_used"] = extract_library_ops_used(program_text, [])
+        if trace_store is not None:
+            trace_store.add_search_result(
+                task_id=task_id,
+                solved=True,
+                winning_program_text=program_text,
+                task_signatures=(),
+            )
     else:
         outcome["failure_bucket"] = "search_budget_exhausted"
         cluster = classify_failure_cluster(outcome)
         outcome["failure_cluster"] = cluster["primary"]
         if cluster["secondary"]:
             outcome["failure_cluster_hints"] = cluster["secondary"]
+        if trace_store is not None:
+            trace_store.add_search_result(
+                task_id=task_id,
+                solved=False,
+                task_signatures=(),
+            )
 
     return outcome
 
@@ -163,7 +175,7 @@ def run_evaluation(
             on_task_done(task_id, outcome)
 
     report_config = {
-        "engine": "guided_search",
+        "engine": "search",
         "dataset": ds.name,
         "dataset_version": ds.version,
         "dataset_split": ds.split,

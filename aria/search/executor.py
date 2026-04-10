@@ -200,6 +200,48 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         params = node.param or {}
         return _exec_object_highlight_ast(grid, params)
 
+    if op == Op.LEGEND_CHAIN_CONNECT:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_legend_chain_connect(grid, params)
+
+    if op == Op.DIAGONAL_COLLISION_TRACE:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_diagonal_collision_trace(grid, params)
+
+    if op == Op.MASKED_PATCH_TRANSFER:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_masked_patch_transfer(grid, params)
+
+    if op == Op.SEPARATOR_MOTIF_BROADCAST:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_separator_motif_broadcast(grid, params)
+
+    if op == Op.LINE_ARITH_BROADCAST:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_line_arith_broadcast(grid, params)
+
+    if op == Op.BARRIER_PORT_TRANSFER:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        params = node.param or {}
+        return _exec_barrier_port_transfer(grid, params)
+
     if op == Op.CAVITY_TRANSFER:
         grid = _child(node, 0, inp, ctx)
         if grid is None:
@@ -562,6 +604,7 @@ def _exec_cavity_transfer_auto(grid):
     """
     from aria.guided.perceive import perceive
     from collections import defaultdict, deque
+    from aria.search.geometry import axis_ray, bbox, boundary_cells, closest_boundary_anchor, component_center
 
     def _components8(cells):
         remaining = set(cells)
@@ -594,10 +637,9 @@ def _exec_cavity_transfer_auto(grid):
         return False
 
     def _cavity_open_sides(host_cells, inside_cells):
-        hr = [r for r, _ in host_cells]
-        hc = [c for _, c in host_cells]
-        top, bot = min(hr), max(hr)
-        left, right = min(hc), max(hc)
+        bounds = bbox(host_cells)
+        top, bot = bounds.top, bounds.bottom
+        left, right = bounds.left, bounds.right
         q = deque(inside_cells)
         seen = set(inside_cells)
         while q:
@@ -622,21 +664,11 @@ def _exec_cavity_transfer_auto(grid):
             open_sides.add('left')
         if any(c == right for _, c in seen):
             open_sides.add('right')
-        return open_sides, (top, bot, left, right)
-
-    def _boundary_cells(host_cells, direction, top, bot, left, right):
-        if direction == 'up':
-            return [(r, c) for r, c in host_cells if r == top]
-        if direction == 'down':
-            return [(r, c) for r, c in host_cells if r == bot]
-        if direction == 'left':
-            return [(r, c) for r, c in host_cells if c == left]
-        return [(r, c) for r, c in host_cells if c == right]
+        return open_sides, bounds
 
     def _direction_order(host_cells, inside_cells, open_sides, bounds):
-        top, bot, left, right = bounds
-        m_cr = sum(r for r, _ in inside_cells) / len(inside_cells)
-        m_cc = sum(c for _, c in inside_cells) / len(inside_cells)
+        top, bot, left, right = bounds.top, bounds.bottom, bounds.left, bounds.right
+        m_cr, m_cc = component_center(inside_cells)
         opposite = {
             'up': 'down',
             'down': 'up',
@@ -661,36 +693,32 @@ def _exec_cavity_transfer_auto(grid):
             candidate_dirs = ['up', 'down', 'left', 'right']
         return sorted(
             candidate_dirs,
-            key=lambda d: (len(_boundary_cells(host_cells, d, top, bot, left, right)), -_dist_to_side(d)),
+            key=lambda d: (len(boundary_cells(host_cells, d)), -_dist_to_side(d)),
         )
 
     def _tip_anchor(host_cells, inside_cells, direction, bounds):
-        top, bot, left, right = bounds
-        m_cr = sum(r for r, _ in inside_cells) / len(inside_cells)
-        m_cc = sum(c for _, c in inside_cells) / len(inside_cells)
-        cells = _boundary_cells(host_cells, direction, top, bot, left, right)
-        if direction in ('up', 'down'):
-            cells = sorted(cells, key=lambda rc: abs(rc[1] - m_cc))
-            return cells[0][1] if cells else None
-        cells = sorted(cells, key=lambda rc: abs(rc[0] - m_cr))
-        return cells[0][0] if cells else None
+        m_cr, m_cc = component_center(inside_cells)
+        return closest_boundary_anchor(
+            host_cells,
+            direction,
+            target_row=m_cr,
+            target_col=m_cc,
+        )
 
     def _project_cells(direction, anchor, bounds, inside_cells):
-        top, bot, left, right = bounds
         if anchor is None:
             return []
-        n = len(inside_cells)
         if direction == 'up':
-            candidates = [(top - 1 - i, anchor) for i in range(n)]
+            start = (bounds.top, anchor)
         elif direction == 'down':
-            candidates = [(bot + 1 + i, anchor) for i in range(n)]
+            start = (bounds.bottom, anchor)
         elif direction == 'left':
-            candidates = [(anchor, left - 1 - i) for i in range(n)]
+            start = (anchor, bounds.left)
         else:
-            candidates = [(anchor, right + 1 + i) for i in range(n)]
+            start = (anchor, bounds.right)
 
         projected = []
-        for nr, nc in candidates:
+        for nr, nc in axis_ray(start, direction, (h, w))[:len(inside_cells)]:
             if 0 <= nr < h and 0 <= nc < w and grid[nr, nc] == bg:
                 projected.append((nr, nc))
             else:
@@ -718,10 +746,9 @@ def _exec_cavity_transfer_auto(grid):
     used_marker_cells = set()
 
     for host_color, host_cells in host_groups:
-        hr = [r for r, c in host_cells]
-        hc = [c for r, c in host_cells]
-        top, bot = min(hr), max(hr)
-        left, right = min(hc), max(hc)
+        host_bounds = bbox(host_cells)
+        top, bot = host_bounds.top, host_bounds.bottom
+        left, right = host_bounds.left, host_bounds.right
 
         for mc, mc_cells in color_cells.items():
             if mc == host_color:
@@ -1019,6 +1046,932 @@ def _exec_object_highlight_ast(grid, params):
     """Execute object highlight from AST."""
     from aria.search.sketch import _exec_object_highlight_full
     return _exec_object_highlight_full(grid, params)
+
+
+def _exec_legend_chain_connect(grid, params):
+    """Connect workspace motifs following a sparse legend/control strip order.
+
+    The control strip provides an ordered color chain. Each occurrence is matched
+    to one connected component of that color in the workspace. Consecutive
+    matched components must align horizontally or vertically; the gap between
+    their bboxes is then painted with the source color.
+    """
+    from aria.guided.perceive import perceive
+    from aria.search.geometry import bridge_area, orthogonal_bridge
+
+    def _detect_control_row(arr, bg, side):
+        h, w = arr.shape
+        rows = range(h - 1, -1, -1) if side == 'bottom' else range(h)
+        for r in rows:
+            cols = [c for c in range(w) if arr[r, c] != bg]
+            if len(cols) < 3:
+                continue
+            # Control rows are sparse singleton marks, not full objects.
+            if any((r > 0 and arr[r - 1, c] != bg) or (r + 1 < h and arr[r + 1, c] != bg) for c in cols):
+                continue
+            return r, cols
+        return None
+
+    def _components_of_color(arr, color, row_limit):
+        h, w = arr.shape
+        seen = set()
+        comps = []
+        for r in range(row_limit):
+            for c in range(w):
+                if arr[r, c] != color or (r, c) in seen:
+                    continue
+                stack = [(r, c)]
+                seen.add((r, c))
+                comp = []
+                while stack:
+                    rr, cc = stack.pop()
+                    comp.append((rr, cc))
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = rr + dr, cc + dc
+                        if 0 <= nr < row_limit and 0 <= nc < w and arr[nr, nc] == color and (nr, nc) not in seen:
+                            seen.add((nr, nc))
+                            stack.append((nr, nc))
+                comps.append(tuple(sorted(comp)))
+        comps.sort(key=lambda cells: (min(r for r, _ in cells), min(c for _, c in cells)))
+        return comps
+
+    def _assign_chain(sequence, pools):
+        best_assignment = None
+        best_cost = None
+
+        def _dfs(i, chosen, used, cost):
+            nonlocal best_assignment, best_cost
+            if best_cost is not None and cost >= best_cost:
+                return
+            if i == len(sequence):
+                best_assignment = list(chosen)
+                best_cost = cost
+                return
+
+            color = sequence[i]
+            for idx, comp in enumerate(pools[color]):
+                key = (color, idx)
+                if key in used:
+                    continue
+                added_cost = 0
+                if chosen:
+                    bridge = orthogonal_bridge(chosen[-1], comp)
+                    if bridge is None:
+                        continue
+                    added_cost = bridge_area(bridge)
+                used.add(key)
+                chosen.append(comp)
+                _dfs(i + 1, chosen, used, cost + added_cost)
+                chosen.pop()
+                used.remove(key)
+
+        _dfs(0, [], set(), 0)
+        return best_assignment
+
+    facts = perceive(grid)
+    bg = params.get('bg', facts.bg)
+    side = params.get('control_side', 'bottom')
+    control = _detect_control_row(grid, bg, side)
+    if control is None:
+        return grid
+
+    control_row, control_cols = control
+    sequence = [int(grid[control_row, c]) for c in control_cols]
+    if len(sequence) < 2:
+        return grid
+
+    pools = {color: _components_of_color(grid, color, control_row) for color in set(sequence)}
+    if any(not pools[color] for color in sequence):
+        return grid
+
+    assignment = _assign_chain(sequence, pools)
+    if assignment is None:
+        return grid
+
+    result = grid.copy()
+    for color, cells_a, cells_b in zip(sequence, assignment, assignment[1:]):
+        bridge = orthogonal_bridge(cells_a, cells_b)
+        if bridge is None:
+            return grid
+        _, r0, r1, c0, c1 = bridge
+        if r0 > r1 or c0 > c1:
+            continue
+        patch = result[r0:r1 + 1, c0:c1 + 1]
+        result[r0:r1 + 1, c0:c1 + 1] = np.where(patch == bg, color, patch)
+
+    return result
+
+
+def _exec_diagonal_collision_trace(grid, params):
+    """Trace diagonal rays from corner/point emitters through bar/point reflectors."""
+    from scipy import ndimage
+
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
+    point_dir_name = params.get('point_dir', 'up_right')
+    include_direct_hit = bool(params.get('include_direct_hit', True))
+    point_dir = {
+        'up_left': (-1, -1),
+        'up_right': (-1, 1),
+        'down_left': (1, -1),
+        'down_right': (1, 1),
+    }.get(point_dir_name, (-1, 1))
+
+    def _classify(coords):
+        rs = [r for r, _ in coords]
+        cs = [c for _, c in coords]
+        h = max(rs) - min(rs) + 1
+        w = max(cs) - min(cs) + 1
+        if len(coords) == 1:
+            return 'point'
+        if len(coords) == 3 and h == 1 and w == 3:
+            return 'hbar'
+        if len(coords) == 3 and h == 3 and w == 1:
+            return 'vbar'
+        if len(coords) == 3 and h == 2 and w == 2:
+            return 'corner'
+        return None
+
+    def _components(arr):
+        comps = []
+        for color in sorted(int(v) for v in np.unique(arr) if v != 0):
+            labels, count = ndimage.label(arr == color, structure=structure)
+            for idx in range(1, count + 1):
+                coords = [tuple(x) for x in np.argwhere(labels == idx).tolist()]
+                kind = _classify(coords)
+                if kind is None:
+                    return None
+                rs = [r for r, _ in coords]
+                cs = [c for _, c in coords]
+                comps.append({
+                    'color': color,
+                    'coords': coords,
+                    'cells': set(coords),
+                    'kind': kind,
+                    'r0': min(rs),
+                    'r1': max(rs),
+                    'c0': min(cs),
+                    'c1': max(cs),
+                })
+        return comps
+
+    def _source_spec(comp):
+        if comp['kind'] == 'point':
+            r, c = comp['coords'][0]
+            return (r - 1, c), point_dir
+
+        if comp['kind'] != 'corner':
+            return None
+
+        r0, r1 = comp['r0'], comp['r1']
+        c0, c1 = comp['c0'], comp['c1']
+        offsets = {(r - r0, c - c0) for r, c in comp['coords']}
+        missing = next(iter({(0, 0), (0, 1), (1, 0), (1, 1)} - offsets))
+        mapping = {
+            (0, 0): ((r1, c1), (1, 1)),
+            (0, 1): ((r1, c0), (1, -1)),
+            (1, 0): ((r0, c1), (-1, 1)),
+            (1, 1): ((r0, c0), (-1, -1)),
+        }
+        return mapping[missing]
+
+    def _hit_component(arr, comps, r, c, dr, dc):
+        h, w = arr.shape
+        hit_cells = [(r, c + dc), (r + dr, c)]
+        if include_direct_hit:
+            hit_cells.append((r + dr, c + dc))
+        candidates = []
+        for rr, cc in hit_cells:
+            if not (0 <= rr < h and 0 <= cc < w):
+                continue
+            if arr[rr, cc] == 0:
+                continue
+            for comp in comps:
+                if (rr, cc) in comp['cells']:
+                    side_rank = 0 if (rr, cc) != (r + dr, c + dc) else 1
+                    candidates.append((side_rank, rr, cc, comp))
+                    break
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return candidates[0][3]
+
+    def _reflect(dr, dc, kind):
+        if kind == 'vbar':
+            return dr, -dc
+        if kind in ('hbar', 'point'):
+            return -dr, dc
+        return None
+
+    comps = _components(grid)
+    if not comps:
+        return grid
+
+    emitters = []
+    for comp in comps:
+        spec = _source_spec(comp)
+        if spec is None:
+            continue
+        (sr, sc), (dr, dc) = spec
+        nr, nc = sr + dr, sc + dc
+        if 0 <= nr < grid.shape[0] and 0 <= nc < grid.shape[1]:
+            emitters.append((comp['color'], nr, nc, dr, dc, 1))
+    if not emitters:
+        return grid
+
+    result = grid.copy()
+    best: dict[tuple[int, int], tuple[int, int]] = {}
+    queue = list(emitters)
+    while queue:
+        color, r, c, dr, dc, dist = queue.pop(0)
+        steps = 0
+        while 0 <= r < grid.shape[0] and 0 <= c < grid.shape[1] and steps < grid.size:
+            steps += 1
+            if grid[r, c] == 0:
+                prev = best.get((r, c))
+                if prev is None or dist < prev[0]:
+                    best[(r, c)] = (dist, color)
+
+            hit = _hit_component(grid, comps, r, c, dr, dc)
+            if hit is not None:
+                prev = best.get((r, c))
+                if prev is None or dist <= prev[0]:
+                    best[(r, c)] = (dist, hit['color'])
+                reflected = _reflect(dr, dc, hit['kind'])
+                if reflected is not None:
+                    ndr, ndc = reflected
+                    queue.append((hit['color'], r + ndr, c + ndc, ndr, ndc, 1))
+                break
+
+            r += dr
+            c += dc
+            dist += 1
+
+    for (r, c), (_, color) in best.items():
+        result[r, c] = color
+    return result
+
+
+def _masked_patch_xforms():
+    return [
+        ("id", lambda a: a),
+        ("rot90", lambda a: np.rot90(a, 1)),
+        ("rot180", lambda a: np.rot90(a, 2)),
+        ("rot270", lambda a: np.rot90(a, 3)),
+        ("flip_h", lambda a: a[:, ::-1]),
+        ("flip_v", lambda a: a[::-1, :]),
+        ("transpose", lambda a: a.T),
+    ]
+
+
+def _masked_patch_source_shape(target_h: int, target_w: int, name: str) -> tuple[int, int]:
+    if name in ("rot90", "rot270", "transpose"):
+        return (target_w, target_h)
+    return (target_h, target_w)
+
+
+def _masked_patch_window_score(
+    grid: Grid,
+    mask_bbox: tuple[int, int, int, int],
+    src_bbox: tuple[int, int, int, int],
+    xform,
+    ring: int,
+) -> tuple[float, int, int] | None:
+    mr0, mc0, mr1, mc1 = mask_bbox
+    sr0, sc0, sr1, sc1 = src_bbox
+    wr0 = max(0, mr0 - ring)
+    wc0 = max(0, mc0 - ring)
+    wr1 = min(grid.shape[0], mr1 + ring + 1)
+    wc1 = min(grid.shape[1], mc1 + ring + 1)
+    swr0 = max(0, sr0 - ring)
+    swc0 = max(0, sc0 - ring)
+    swr1 = min(grid.shape[0], sr1 + ring + 1)
+    swc1 = min(grid.shape[1], sc1 + ring + 1)
+    mask_window = grid[wr0:wr1, wc0:wc1]
+    src_window = grid[swr0:swr1, swc0:swc1]
+    transformed_window = xform(src_window)
+    if transformed_window.shape != mask_window.shape:
+        return None
+
+    inner_r0 = mr0 - wr0
+    inner_c0 = mc0 - wc0
+    inner_r1 = inner_r0 + (mr1 - mr0)
+    inner_c1 = inner_c0 + (mc1 - mc0)
+
+    eq = 0
+    total = 0
+    for r in range(mask_window.shape[0]):
+        for c in range(mask_window.shape[1]):
+            inside = inner_r0 <= r <= inner_r1 and inner_c0 <= c <= inner_c1
+            if inside:
+                continue
+            total += 1
+            if transformed_window[r, c] == mask_window[r, c]:
+                eq += 1
+    if total == 0:
+        return None
+    return (eq / total, eq, total)
+
+
+def _masked_patch_best_for_bbox(
+    grid: Grid,
+    mask_bbox: tuple[int, int, int, int],
+    *,
+    mask_color: int,
+    ring: int,
+) -> tuple[np.ndarray, tuple[float, int, int]] | None:
+    mr0, mc0, mr1, mc1 = mask_bbox
+    target_h = mr1 - mr0 + 1
+    target_w = mc1 - mc0 + 1
+
+    best_score: tuple[float, int, int] | None = None
+    best_outputs: dict[tuple[tuple[int, int], bytes], np.ndarray] = {}
+
+    for name, xform in _masked_patch_xforms():
+        source_h, source_w = _masked_patch_source_shape(target_h, target_w, name)
+        for r in range(grid.shape[0] - source_h + 1):
+            for c in range(grid.shape[1] - source_w + 1):
+                sr1 = r + source_h - 1
+                sc1 = c + source_w - 1
+                overlaps = not (sr1 < mr0 or r > mr1 or sc1 < mc0 or c > mc1)
+                if overlaps:
+                    continue
+                source = grid[r:r + source_h, c:c + source_w]
+                if np.any(source == mask_color):
+                    continue
+                score = _masked_patch_window_score(
+                    grid,
+                    mask_bbox,
+                    (r, c, sr1, sc1),
+                    xform,
+                    ring,
+                )
+                if score is None:
+                    continue
+                transformed = xform(source)
+                key = (transformed.shape, transformed.tobytes())
+                if best_score is None or score > best_score:
+                    best_score = score
+                    best_outputs = {key: transformed.copy()}
+                elif score == best_score:
+                    best_outputs.setdefault(key, transformed.copy())
+
+    if best_score is None or len(best_outputs) != 1:
+        return None
+    return next(iter(best_outputs.values())), best_score
+
+
+def _exec_masked_patch_transfer(grid, params):
+    """Recover a rectangular masked patch from a transformed source elsewhere.
+
+    The op detects solid rectangular mask objects of a learned mask color,
+    searches the rest of the grid for same-size (up to rotation/transpose)
+    source patches, and selects the patch whose transformed surrounding ring
+    best matches the visible context around the mask.
+    """
+    from aria.guided.perceive import perceive
+
+    mask_color = int(params.get("mask_color", -1))
+    ring = int(params.get("ring", 1))
+    if mask_color < 0:
+        return None
+
+    facts = perceive(grid)
+    mask_objects = [
+        obj for obj in facts.objects
+        if obj.color == mask_color and obj.is_rectangular and np.all(obj.mask)
+    ]
+    if not mask_objects:
+        return None
+
+    best_score: tuple[float, int, int] | None = None
+    best_outputs: dict[tuple[tuple[int, int], bytes], np.ndarray] = {}
+    for obj in mask_objects:
+        bbox = (obj.row, obj.col, obj.row + obj.height - 1, obj.col + obj.width - 1)
+        found = _masked_patch_best_for_bbox(grid, bbox, mask_color=mask_color, ring=ring)
+        if found is None:
+            continue
+        patch, score = found
+        key = (patch.shape, patch.tobytes())
+        if best_score is None or score > best_score:
+            best_score = score
+            best_outputs = {key: patch}
+        elif score == best_score:
+            best_outputs.setdefault(key, patch)
+
+    if best_score is None or len(best_outputs) != 1:
+        return None
+    return next(iter(best_outputs.values()))
+
+
+def _broadcast_run_score(grid: Grid, axis: str, sep_idx: int, bg: int) -> int:
+    """Count orthogonal lines with content on exactly one side of the separator."""
+    if axis == "col":
+        total = 0
+        for r in range(grid.shape[0]):
+            left = grid[r, :sep_idx]
+            right = grid[r, sep_idx + 1:]
+            left_non = np.count_nonzero(left != bg)
+            right_non = np.count_nonzero(right != bg)
+            if (left_non > 0 and right_non == 0) or (right_non > 0 and left_non == 0):
+                total += 1
+        return total
+
+    total = 0
+    for c in range(grid.shape[1]):
+        top = grid[:sep_idx, c]
+        bottom = grid[sep_idx + 1:, c]
+        top_non = np.count_nonzero(top != bg)
+        bottom_non = np.count_nonzero(bottom != bg)
+        if (top_non > 0 and bottom_non == 0) or (bottom_non > 0 and top_non == 0):
+            total += 1
+    return total
+
+
+def _mono_separator_candidates(grid: Grid, axis: str, bg: int) -> list[int]:
+    """Separator-like lines with a single non-background color and bg gaps allowed."""
+    n = grid.shape[0] if axis == "row" else grid.shape[1]
+    out: list[int] = []
+    for idx in range(n):
+        line = grid[idx, :] if axis == "row" else grid[:, idx]
+        vals = {int(v) for v in line if int(v) != bg}
+        if len(vals) == 1 and np.count_nonzero(line != bg) >= 2:
+            out.append(idx)
+    return out
+
+
+def _non_bg_runs(line: np.ndarray, bg: int) -> list[tuple[int, int]]:
+    """Contiguous non-background runs in natural line order."""
+    runs: list[tuple[int, int]] = []
+    i = 0
+    n = len(line)
+    while i < n:
+        if int(line[i]) == bg:
+            i += 1
+            continue
+        color = int(line[i])
+        j = i + 1
+        while j < n and int(line[j]) == color:
+            j += 1
+        runs.append((color, j - i))
+        i = j
+    return runs
+
+
+def _paint_periodic_runs(dest_len: int, runs: list[tuple[int, int]], dtype) -> np.ndarray:
+    """Overlay periodic colors using run lengths as periods."""
+    dest = np.zeros(dest_len, dtype=dtype)
+    for color, period in runs:
+        for q in range(0, dest_len, period):
+            dest[q] = color
+    return dest
+
+
+def _exec_separator_motif_broadcast(grid: Grid, params: dict[str, Any]) -> Grid:
+    """Broadcast separator-side line motifs into the empty opposite side.
+
+    For each orthogonal line, whichever side of the separator contains
+    non-background content becomes the source if the opposite side is empty.
+    Source runs are ordered from farthest-from-separator to nearest, then
+    painted into the destination using run length as the broadcast period.
+    Nearer runs overwrite farther ones, which captures the observed
+    separator-adjacent precedence.
+    """
+    from aria.guided.perceive import perceive
+
+    axis = str(params.get("axis", "auto"))
+    facts = perceive(grid)
+    bg = int(facts.bg)
+    row_seps = sorted({s.index for s in facts.separators if s.axis == "row"})
+    col_seps = sorted({s.index for s in facts.separators if s.axis == "col"})
+    row_candidates = sorted(set(row_seps) | set(_mono_separator_candidates(grid, "row", bg)))
+    col_candidates = sorted(set(col_seps) | set(_mono_separator_candidates(grid, "col", bg)))
+
+    candidates: list[tuple[str, int, int]] = []
+    if axis in {"auto", "row"}:
+        for idx in row_candidates:
+            candidates.append(("row", idx, _broadcast_run_score(grid, "row", idx, bg)))
+    if axis in {"auto", "col"}:
+        for idx in col_candidates:
+            candidates.append(("col", idx, _broadcast_run_score(grid, "col", idx, bg)))
+
+    candidates = [cand for cand in candidates if cand[2] > 0]
+    if not candidates:
+        return grid.copy()
+
+    sep_axis, sep_idx, _ = max(candidates, key=lambda item: (item[2], item[0] == "col"))
+    out = grid.copy()
+
+    if sep_axis == "col":
+        for r in range(grid.shape[0]):
+            left = grid[r, :sep_idx]
+            right = grid[r, sep_idx + 1:]
+            left_non = np.count_nonzero(left != bg)
+            right_non = np.count_nonzero(right != bg)
+            if left_non > 0 and right_non == 0:
+                run_order = _non_bg_runs(left, bg)
+                if run_order:
+                    out[r, sep_idx + 1:] = _paint_periodic_runs(len(right), run_order, grid.dtype)
+            elif right_non > 0 and left_non == 0:
+                run_order = list(reversed(_non_bg_runs(right, bg)))
+                if run_order:
+                    out[r, :sep_idx] = _paint_periodic_runs(len(left), run_order, grid.dtype)[::-1]
+        return out
+
+    for c in range(grid.shape[1]):
+        top = grid[:sep_idx, c]
+        bottom = grid[sep_idx + 1:, c]
+        top_non = np.count_nonzero(top != bg)
+        bottom_non = np.count_nonzero(bottom != bg)
+        if top_non > 0 and bottom_non == 0:
+            run_order = _non_bg_runs(top, bg)
+            if run_order:
+                out[sep_idx + 1:, c] = _paint_periodic_runs(len(bottom), run_order, grid.dtype)
+        elif bottom_non > 0 and top_non == 0:
+            run_order = list(reversed(_non_bg_runs(bottom, bg)))
+            if run_order:
+                out[:sep_idx, c] = _paint_periodic_runs(len(top), run_order, grid.dtype)[::-1]
+    return out
+
+
+def _line_repeat_score(grid: Grid, axis: str) -> int:
+    """Total repeated-color evidence along rows or columns."""
+    n_lines = grid.shape[0] if axis == "row" else grid.shape[1]
+    total = 0
+    for idx in range(n_lines):
+        line = grid[idx, :] if axis == "row" else grid[:, idx]
+        for color in (int(v) for v in np.unique(line) if int(v) != 0):
+            count = int(np.sum(line == color))
+            if count >= 2:
+                total += count
+    return total
+
+
+def _broadcast_axis(grid: Grid, axis: str) -> Grid:
+    """Broadcast sparse arithmetic scaffolds along the given axis."""
+    import math
+
+    h, w = grid.shape
+    out = np.zeros_like(grid)
+    n_lines = h if axis == "row" else w
+    line_len = w if axis == "row" else h
+
+    def _get_line(i: int) -> np.ndarray:
+        return grid[i, :] if axis == "row" else grid[:, i]
+
+    def _put_line(i: int, arr: np.ndarray) -> None:
+        if axis == "row":
+            out[i, :] = arr
+        else:
+            out[:, i] = arr
+
+    for idx in range(n_lines):
+        line = _get_line(idx)
+        result = np.zeros_like(line)
+        infos: list[tuple[int, list[int], int | None, int | None]] = []
+        for color in (int(v) for v in np.unique(line) if int(v) != 0):
+            positions = np.flatnonzero(line == color).tolist()
+            if len(positions) >= 2:
+                diffs = [b - a for a, b in zip(positions, positions[1:]) if b > a]
+                step = diffs[0]
+                for diff in diffs[1:]:
+                    step = math.gcd(step, diff)
+                residue = positions[0] % step if step else 0
+                infos.append((color, positions, step, residue))
+            else:
+                infos.append((color, positions, None, None))
+
+        scaffolds = [info for info in infos if info[2] is not None]
+        claimed = np.zeros(line_len, dtype=bool)
+        if len(scaffolds) == 1:
+            scaffold_color, scaffold_pos, scaffold_step, scaffold_residue = scaffolds[0]
+            aligned_override = False
+            for color, positions, step, _ in infos:
+                if step is not None:
+                    continue
+                pos = positions[0]
+                if pos % scaffold_step != scaffold_residue:
+                    result[pos] = color
+                    claimed[pos] = True
+                    continue
+                aligned_override = True
+                if max(scaffold_pos) < pos:
+                    search = range(0, pos + 1)
+                elif min(scaffold_pos) > pos:
+                    search = range(pos, line_len)
+                else:
+                    search = [pos]
+                for q in search:
+                    if q % scaffold_step == scaffold_residue:
+                        result[q] = color
+                        claimed[q] = True
+            if not aligned_override:
+                for q in range(line_len):
+                    if q % scaffold_step == scaffold_residue and not claimed[q]:
+                        result[q] = scaffold_color
+        else:
+            for color, positions, step, residue in infos:
+                if step is None:
+                    result[positions[0]] = color
+                    continue
+                for q in range(line_len):
+                    if q % step == residue:
+                        result[q] = color
+        _put_line(idx, result)
+
+    return out
+
+
+def _exec_line_arith_broadcast(grid: Grid, params: dict[str, Any]) -> Grid:
+    """Broadcast sparse arithmetic line scaffolds along the stronger axis."""
+    axis = str(params.get("axis", "auto"))
+    if axis == "auto":
+        row_score = _line_repeat_score(grid, "row")
+        col_score = _line_repeat_score(grid, "col")
+        axis = "row" if row_score >= col_score else "col"
+    if axis not in {"row", "col"}:
+        return grid.copy()
+    return _broadcast_axis(grid, axis)
+
+
+def _exec_barrier_port_transfer(grid: Grid, params: dict[str, Any]) -> Grid:
+    """Pack objects into barrier-adjacent port families and slide them through openings."""
+    from collections import defaultdict
+
+    from scipy import ndimage
+
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
+
+    def _components_of_color(color: int) -> list[dict[str, Any]]:
+        labels, count = ndimage.label(grid == color, structure=structure)
+        comps: list[dict[str, Any]] = []
+        for idx in range(1, count + 1):
+            coords = np.argwhere(labels == idx)
+            rs = coords[:, 0]
+            cs = coords[:, 1]
+            mask = np.zeros((rs.max() - rs.min() + 1, cs.max() - cs.min() + 1), dtype=bool)
+            mask[rs - rs.min(), cs - cs.min()] = True
+            comps.append({
+                "color": int(color),
+                "coords": [(int(r), int(c)) for r, c in coords],
+                "r0": int(rs.min()),
+                "r1": int(rs.max()),
+                "c0": int(cs.min()),
+                "c1": int(cs.max()),
+                "h": int(rs.max() - rs.min() + 1),
+                "w": int(cs.max() - cs.min() + 1),
+                "area": int(len(coords)),
+                "mask": mask,
+            })
+        return comps
+
+    def _detect_barrier() -> dict[str, Any] | None:
+        best: tuple[int, dict[str, Any]] | None = None
+        for color in sorted(int(v) for v in np.unique(grid) if v != 0):
+            for comp in _components_of_color(color):
+                spans_w = comp["c0"] == 0 and comp["c1"] == grid.shape[1] - 1
+                spans_h = comp["r0"] == 0 and comp["r1"] == grid.shape[0] - 1
+                if not (spans_w or spans_h):
+                    continue
+                orient = "horizontal" if spans_w and comp["w"] >= comp["h"] else "vertical"
+                candidate = {"orient": orient, **comp}
+                if best is None or comp["area"] > best[0]:
+                    best = (comp["area"], candidate)
+        return None if best is None else best[1]
+
+    def _dominant_bg(barrier_color: int) -> int:
+        vals, counts = np.unique(grid, return_counts=True)
+        candidates = [
+            (int(color), int(count))
+            for color, count in zip(vals, counts, strict=False)
+            if int(color) != barrier_color
+        ]
+        return max(candidates, key=lambda item: item[1])[0] if candidates else 0
+
+    def _port_candidates(barrier: dict[str, Any], bg: int) -> list[dict[str, Any]]:
+        r0, r1, c0, c1 = barrier["r0"], barrier["r1"], barrier["c0"], barrier["c1"]
+        sub = grid[r0:r1 + 1, c0:c1 + 1]
+        labels, count = ndimage.label(sub == bg, structure=structure)
+        ports: list[dict[str, Any]] = []
+        for idx in range(1, count + 1):
+            coords = np.argwhere(labels == idx)
+            rs = coords[:, 0] + r0
+            cs = coords[:, 1] + c0
+            if barrier["orient"] == "horizontal":
+                side = "top" if int(rs.min()) == r0 else "bottom" if int(rs.max()) == r1 else None
+                if side is None:
+                    continue
+                extent = int(cs.max() - cs.min() + 1)
+                axis_center = (float(cs.min()) + float(cs.max())) / 2.0
+            else:
+                side = "left" if int(cs.min()) == c0 else "right" if int(cs.max()) == c1 else None
+                if side is None:
+                    continue
+                extent = int(rs.max() - rs.min() + 1)
+                axis_center = (float(rs.min()) + float(rs.max())) / 2.0
+
+            family_extent = extent + 2
+            lane_start = int(np.floor(axis_center - (family_extent - 1) / 2.0))
+            ports.append({
+                "side": side,
+                "family_extent": family_extent,
+                "axis_center": axis_center,
+                "lane_start": lane_start,
+                "hole_bbox": (int(rs.min()), int(cs.min()), int(rs.max()), int(cs.max())),
+                "hole_cells": {(int(r), int(c)) for r, c in zip(rs, cs, strict=False)},
+            })
+        return ports
+
+    def _objects(barrier_color: int, bg: int) -> list[dict[str, Any]]:
+        objs: list[dict[str, Any]] = []
+        for color in sorted(int(v) for v in np.unique(grid) if v not in (bg, barrier_color)):
+            objs.extend(_components_of_color(color))
+        return objs
+
+    def _source_side(obj: dict[str, Any], barrier: dict[str, Any]) -> str:
+        if barrier["orient"] == "horizontal":
+            if obj["r1"] < barrier["r0"]:
+                return "top"
+            if obj["r0"] > barrier["r1"]:
+                return "bottom"
+        else:
+            if obj["c1"] < barrier["c0"]:
+                return "left"
+            if obj["c0"] > barrier["c1"]:
+                return "right"
+        return "interior"
+
+    def _can_place(canvas: np.ndarray, obj: dict[str, Any], top: int, left: int, bg: int) -> bool:
+        h, w = obj["mask"].shape
+        H, W = canvas.shape
+        if top < 0 or left < 0 or top + h > H or left + w > W:
+            return False
+        patch = canvas[top:top + h, left:left + w]
+        return bool(np.all(~obj["mask"] | (patch == bg)))
+
+    def _place(canvas: np.ndarray, obj: dict[str, Any], top: int, left: int) -> None:
+        patch = canvas[top:top + obj["mask"].shape[0], left:left + obj["mask"].shape[1]]
+        patch[obj["mask"]] = obj["color"]
+
+    def _settled_position(canvas: np.ndarray, obj: dict[str, Any], port: dict[str, Any], bg: int) -> tuple[int, int] | None:
+        if barrier["orient"] == "horizontal":
+            left = port["lane_start"]
+            if port["side"] == "top":
+                top = 0
+                while _can_place(canvas, obj, top + 1, left, bg):
+                    top += 1
+            else:
+                top = canvas.shape[0] - obj["h"]
+                while _can_place(canvas, obj, top - 1, left, bg):
+                    top -= 1
+            return (top, left) if _can_place(canvas, obj, top, left, bg) else None
+
+        top = port["lane_start"]
+        if port["side"] == "left":
+            left = 0
+            while _can_place(canvas, obj, top, left + 1, bg):
+                left += 1
+        else:
+            left = canvas.shape[1] - obj["w"]
+            while _can_place(canvas, obj, top, left - 1, bg):
+                left -= 1
+        return (top, left) if _can_place(canvas, obj, top, left, bg) else None
+
+    def _hole_occupancy(obj: dict[str, Any], port: dict[str, Any], top: int, left: int) -> int:
+        return sum(
+            1
+            for dr, dc in zip(*np.where(obj["mask"]), strict=False)
+            if (top + int(dr), left + int(dc)) in port["hole_cells"]
+        )
+
+    barrier = _detect_barrier()
+    if barrier is None:
+        return grid
+    bg = _dominant_bg(int(barrier["color"]))
+    ports = _port_candidates(barrier, bg)
+    if not ports:
+        return grid
+    objs = _objects(int(barrier["color"]), bg)
+    if not objs:
+        return grid
+
+    result = grid.copy()
+    for obj in objs:
+        for r, c in obj["coords"]:
+            result[r, c] = bg
+
+    axis_key = "w" if barrier["orient"] == "horizontal" else "h"
+    groups: dict[int, list[dict[str, Any]]] = {}
+    for obj in objs:
+        groups.setdefault(int(obj[axis_key]), []).append(obj)
+
+    assignments: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for extent, group in groups.items():
+        candidates = [port for port in ports if port["family_extent"] == extent]
+        if not candidates:
+            return grid
+        source_axis_center = {
+            id(obj): (
+                (obj["c0"] + obj["c1"]) / 2.0 if barrier["orient"] == "horizontal"
+                else (obj["r0"] + obj["r1"]) / 2.0
+            )
+            for obj in group
+        }
+        previews: dict[tuple[int, int], tuple[int, int] | None] = {}
+        occupancy: dict[tuple[int, int], int] = {}
+        for obj_idx, obj in enumerate(group):
+            for port_idx, port in enumerate(candidates):
+                pos = _settled_position(result, obj, port, bg)
+                previews[(obj_idx, port_idx)] = pos
+                occupancy[(obj_idx, port_idx)] = 0 if pos is None else _hole_occupancy(obj, port, *pos)
+
+        per_port: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        active_port_indices: set[int] = set()
+        assigned_indices: set[int] = set()
+        for obj_idx, obj in enumerate(group):
+            best_occ = max(occupancy[(obj_idx, port_idx)] for port_idx in range(len(candidates)))
+            if best_occ <= 0:
+                continue
+            chosen_idx = min(
+                [port_idx for port_idx in range(len(candidates)) if occupancy[(obj_idx, port_idx)] == best_occ],
+                key=lambda port_idx: (
+                    abs(source_axis_center[id(obj)] - candidates[port_idx]["axis_center"]),
+                    0 if _source_side(obj, barrier) == candidates[port_idx]["side"] else 1,
+                    -obj["area"],
+                ),
+            )
+            enriched = dict(obj)
+            enriched["_anchor_occ"] = best_occ
+            per_port[chosen_idx].append(enriched)
+            active_port_indices.add(chosen_idx)
+            assigned_indices.add(obj_idx)
+
+        if not active_port_indices:
+            centers = [source_axis_center[id(obj)] for obj in group]
+            mean_center = sum(centers) / len(centers)
+            chosen_idx = min(
+                range(len(candidates)),
+                key=lambda port_idx: (
+                    abs(candidates[port_idx]["axis_center"] - mean_center),
+                    0 if candidates[port_idx]["side"] in ("top", "left") else 1,
+                    candidates[port_idx]["hole_bbox"],
+                ),
+            )
+            active_port_indices.add(chosen_idx)
+
+        for obj_idx, obj in enumerate(group):
+            if obj_idx in assigned_indices:
+                continue
+            same_side_ports = [
+                port_idx for port_idx in active_port_indices
+                if candidates[port_idx]["side"] == _source_side(obj, barrier)
+            ]
+            choices = same_side_ports or list(active_port_indices)
+            chosen_idx = min(
+                choices,
+                key=lambda port_idx: (
+                    abs(source_axis_center[id(obj)] - candidates[port_idx]["axis_center"]),
+                    candidates[port_idx]["hole_bbox"],
+                ),
+            )
+            enriched = dict(obj)
+            enriched["_anchor_occ"] = 0
+            per_port[chosen_idx].append(enriched)
+
+        for port_idx in sorted(active_port_indices):
+            assignments.append((candidates[port_idx], per_port[port_idx]))
+
+    assignments.sort(key=lambda item: (item[0]["family_extent"], item[0]["axis_center"]))
+    for port, group in assignments:
+        axis_center = lambda obj: (
+            (obj["c0"] + obj["c1"]) / 2.0
+            if barrier["orient"] == "horizontal"
+            else (obj["r0"] + obj["r1"]) / 2.0
+        )
+        anchor = max(
+            group,
+            key=lambda obj: (
+                int(obj.get("_anchor_occ", 0)),
+                -abs(axis_center(obj) - port["axis_center"]),
+                obj["area"],
+            ),
+        )
+        opposite = sorted(
+            [obj for obj in group if obj is not anchor and _source_side(obj, barrier) != port["side"]],
+            key=lambda obj: (abs(axis_center(obj) - port["axis_center"]), -obj["area"]),
+        )
+        same_side = sorted(
+            [obj for obj in group if obj is not anchor and _source_side(obj, barrier) == port["side"]],
+            key=lambda obj: (abs(axis_center(obj) - port["axis_center"]), -obj["area"]),
+        )
+        ordered = [anchor, *opposite, *same_side]
+
+        for obj in ordered:
+            pos = _settled_position(result, obj, port, bg)
+            if pos is None:
+                return grid
+            _place(result, obj, *pos)
+
+    return result
 
 
 def _exec_quadrant_template_decode(grid, params):

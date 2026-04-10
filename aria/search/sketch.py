@@ -478,6 +478,18 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.ANOMALY_HALO, [ASTNode(Op.INPUT)], param=p)
     if action == 'object_highlight':
         return ASTNode(Op.OBJECT_HIGHLIGHT, [ASTNode(Op.INPUT)], param=p)
+    if action == 'legend_chain_connect':
+        return ASTNode(Op.LEGEND_CHAIN_CONNECT, [ASTNode(Op.INPUT)], param=p)
+    if action == 'diagonal_collision_trace':
+        return ASTNode(Op.DIAGONAL_COLLISION_TRACE, [ASTNode(Op.INPUT)], param=p)
+    if action == 'masked_patch_transfer':
+        return ASTNode(Op.MASKED_PATCH_TRANSFER, [ASTNode(Op.INPUT)], param=p)
+    if action == 'separator_motif_broadcast':
+        return ASTNode(Op.SEPARATOR_MOTIF_BROADCAST, [ASTNode(Op.INPUT)], param=p)
+    if action == 'line_arith_broadcast':
+        return ASTNode(Op.LINE_ARITH_BROADCAST, [ASTNode(Op.INPUT)], param=p)
+    if action == 'barrier_port_transfer':
+        return ASTNode(Op.BARRIER_PORT_TRANSFER, [ASTNode(Op.INPUT)], param=p)
     if action == 'cavity_transfer':
         return ASTNode(Op.CAVITY_TRANSFER, [ASTNode(Op.INPUT)], param=p)
 
@@ -545,25 +557,15 @@ def _exec_quadrant_template_decode(inp, step):
 
 
 def _exec_object_highlight_full(inp, params):
-    """Execute full object-level highlight with induced symbolic rules.
-
-    Rules:
-    1. shape_match: panel has motif in P0's shapes → highlight matched slots
-       - n_unmatched <= 1 → full panel interior (cols 1..W-2)
-       - n_unmatched > 1 → slot-width union around matched motifs
-    2. band_fill: when workspace shape→slot mapping is order-preserving and
-       there is no full-match panel, propagate a fallback slot into panels
-       with no shape matches that do not already occupy that slot
-    3. P0_highlight: any_full_match OR all_ws_highlight → full width (cols 0..W-1)
-    4. Separator: first ground-colored row after each highlighted panel
-       (same column range as the panel)
-    5. Bottom band: last 2 rows, full width
-    """
+    """Execute object highlight from panel facts plus induced boolean rules."""
     from aria.guided.perceive import perceive
     from aria.search.motif import extract_motifs, extract_panel_facts
+    from aria.search.rules import eval_rule
 
     ground = params.get('ground', 8)
     highlight = params.get('highlight', 3)
+    shape_rule = params.get('shape_rule')
+    p0_rule = params.get('p0_rule')
 
     facts = perceive(inp)
     rs = sorted(set(s.index for s in facts.separators if s.axis == 'row'))
@@ -609,8 +611,12 @@ def _exec_object_highlight_full(inp, params):
         ws_facts.append((pi, r0, r1, pf))
         motifs = extract_motifs(inp[r0:r1, :], bg=0, ground=ground, min_cells=2)
         panel_slots[pi] = {sid for sid in (_slot_id(m.col) for m in motifs) if sid is not None}
+        should_highlight = (
+            eval_rule(shape_rule, pf.to_rule_dict())
+            if shape_rule is not None else pf.any_match
+        )
 
-        if pf.any_match:
+        if pf.any_match and should_highlight:
             matched = [m for m in motifs if m.motif in p0_shapes]
             panel_matches[pi] = matched
             for m in matched:
@@ -697,8 +703,11 @@ def _exec_object_highlight_full(inp, params):
                         result[r, c] = highlight
 
     # --- Rule 3: P0 highlight (full width) ---
-    all_ws_hl = all(pi in highlighted for pi, _, _, _ in ws_facts)
-    p0_hl = any_full or all_ws_hl
+    aggregate_facts = {
+        'any_full_match': any_full,
+        'all_ws_highlight': bool(ws_facts) and all(pi in highlighted for pi, _, _, _ in ws_facts),
+    }
+    p0_hl = eval_rule(p0_rule, aggregate_facts) if p0_rule is not None else aggregate_facts['any_full_match']
 
     if p0_hl:
         highlighted[0] = (0, w)

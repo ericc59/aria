@@ -107,6 +107,15 @@ class PanelFacts:
     color_disjoint: bool       # no shared colors with P0
     fewer_motifs: bool         # fewer motifs than P0
 
+    def to_rule_dict(self) -> dict[str, bool]:
+        """Boolean fields suitable for tiny symbolic rule induction."""
+        return {
+            'any_match': self.any_match,
+            'full_match': self.full_match,
+            'color_disjoint': self.color_disjoint,
+            'fewer_motifs': self.fewer_motifs,
+        }
+
 
 def extract_panel_facts(
     panel: np.ndarray,

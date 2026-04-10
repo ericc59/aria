@@ -76,6 +76,30 @@ class RefinementTraceStore:
             },
         })
 
+    def add_search_result(
+        self,
+        *,
+        task_id: str | None,
+        solved: bool,
+        winning_program_text: str | None = None,
+        task_signatures: tuple[str, ...] = (),
+    ) -> None:
+        """Record a minimal search-only solve attempt.
+
+        The current canonical `aria/search` path does not emit refinement-round
+        traces, but eval still uses the trace store as a per-task record sink.
+        """
+        self._records.append({
+            "task_id": task_id,
+            "solved": solved,
+            "solve_source": "search" if solved else "unsolved",
+            "candidates_tried": 0,
+            "task_signatures": list(task_signatures),
+            "winning_program": winning_program_text if solved else None,
+            "rounds": [],
+            "search": {"canonical": True},
+        })
+
     def all_records(self) -> list[dict]:
         return list(self._records)
 

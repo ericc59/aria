@@ -80,6 +80,14 @@ class Op(Enum):
     LEGEND_FRAME_FILL = auto()         # Grid → Grid  param: {color_map: dict}
     ANOMALY_HALO = auto()              # Grid → Grid  param: {c1, c2, halo_color}
     OBJECT_HIGHLIGHT = auto()          # Grid → Grid  param: {ground, highlight, bottom_alt_color?}
+    LEGEND_CHAIN_CONNECT = auto()      # Grid → Grid  param: {control_side?}
+    DIAGONAL_COLLISION_TRACE = auto()  # Grid → Grid  param: {point_dir?: 'up_right', include_direct_hit?: bool}
+    MASKED_PATCH_TRANSFER = auto()     # Grid → Grid  param: {mask_color, ring?}
+    STACKED_GLYPH_TRACE = auto()       # legacy/noncanonical compatibility op
+    CORNER_DIAG_FILL = auto()          # legacy/noncanonical compatibility op
+    SEPARATOR_MOTIF_BROADCAST = auto()  # Grid → Grid  param: {axis: 'auto'|'row'|'col'}
+    LINE_ARITH_BROADCAST = auto()      # Grid → Grid  param: {axis: 'auto'|'row'|'col'}
+    BARRIER_PORT_TRANSFER = auto()     # Grid → Grid  param: {mode: 'auto'}
     CAVITY_TRANSFER = auto()           # Grid → Grid  param: {mode: 'auto'}
 
     # Object-level actions

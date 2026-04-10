@@ -57,6 +57,22 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    progs = _derive_masked_patch_transfer(demos)
+    if progs:
+        return progs
+
+    progs = _derive_separator_motif_broadcast(demos)
+    if progs:
+        return progs
+
+    progs = _derive_line_arith_broadcast(demos)
+    if progs:
+        return progs
+
+    progs = _derive_barrier_port_transfer(demos)
+    if progs:
+        return progs
+
     progs = _derive_legend_frame_fill(demos)
     if progs:
         return progs
@@ -64,6 +80,10 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     # Remaining strategies require same-shape
     if any(inp.shape != out.shape for inp, out in demos):
         return []
+
+    progs = _derive_diagonal_collision_trace(demos)
+    if progs:
+        return progs
 
     # Compute transitions for all demos
     all_transitions = []
@@ -927,6 +947,92 @@ def _derive_cavity_transfer(demos):
     return [prog]
 
 
+def _derive_masked_patch_transfer(demos):
+    """Recover a solid rectangular mask from a transformed source patch elsewhere."""
+    from aria.guided.perceive import perceive
+    from aria.search.executor import _exec_masked_patch_transfer
+
+    mask_colors: set[int] | None = None
+    for inp, out in demos:
+        if inp.shape == out.shape:
+            return []
+        facts = perceive(inp)
+        candidates = {
+            int(obj.color)
+            for obj in facts.objects
+            if obj.is_rectangular
+            and np.all(obj.mask)
+            and (obj.height, obj.width) == out.shape
+            and obj.color != facts.bg
+        }
+        if not candidates:
+            return []
+        mask_colors = candidates if mask_colors is None else (mask_colors & candidates)
+        if not mask_colors:
+            return []
+
+    for mask_color in sorted(mask_colors):
+        params = {"mask_color": int(mask_color), "ring": 1}
+        if all(np.array_equal(_exec_masked_patch_transfer(inp, params), out) for inp, out in demos):
+            prog = SearchProgram(
+                steps=[SearchStep("masked_patch_transfer", params)],
+                provenance=f"derive:masked_patch_transfer_c{mask_color}",
+            )
+            return [prog]
+    return []
+
+
+def _derive_separator_motif_broadcast(demos):
+    """Detect separator-line motifs broadcast into an empty opposite side."""
+    from aria.search.executor import _exec_separator_motif_broadcast
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    params = {"axis": "auto"}
+    if all(np.array_equal(_exec_separator_motif_broadcast(inp, params), out) for inp, out in demos):
+        prog = SearchProgram(
+            steps=[SearchStep("separator_motif_broadcast", params)],
+            provenance="derive:separator_motif_broadcast",
+        )
+        return [prog]
+    return []
+
+
+def _derive_line_arith_broadcast(demos):
+    """Detect mixed-axis arithmetic line broadcast from sparse line scaffolds."""
+    from aria.search.executor import _exec_line_arith_broadcast
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    params = {"axis": "auto"}
+    if all(np.array_equal(_exec_line_arith_broadcast(inp, params), out) for inp, out in demos):
+        prog = SearchProgram(
+            steps=[SearchStep("line_arith_broadcast", params)],
+            provenance="derive:line_arith_broadcast",
+        )
+        return [prog]
+    return []
+
+
+def _derive_barrier_port_transfer(demos):
+    """Detect object relocation through barrier opening families."""
+    from aria.search.executor import _exec_barrier_port_transfer
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    params = {"mode": "auto"}
+    if all(np.array_equal(_exec_barrier_port_transfer(inp, params), out) for inp, out in demos):
+        prog = SearchProgram(
+            steps=[SearchStep("barrier_port_transfer", params)],
+            provenance="derive:barrier_port_transfer",
+        )
+        return [prog]
+    return []
+
+
 def _derive_legend_frame_fill(demos):
     """Fill bg cells enclosed by colored boundaries.
 
@@ -956,6 +1062,66 @@ def _derive_legend_frame_fill(demos):
     prog = SearchProgram(
         steps=[SearchStep('legend_frame_fill', params)],
         provenance='derive:legend_enclosed_fill',
+    )
+    return [prog]
+
+
+def _derive_diagonal_collision_trace(demos):
+    """Detect diagonal ray tasks with corner/point emitters and bar/point bounces."""
+    from scipy import ndimage
+
+    from aria.search.executor import _exec_diagonal_collision_trace
+
+    structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=int)
+
+    def _classify(coords):
+        rs = [r for r, _ in coords]
+        cs = [c for _, c in coords]
+        h = max(rs) - min(rs) + 1
+        w = max(cs) - min(cs) + 1
+        if len(coords) == 1:
+            return 'point'
+        if len(coords) == 3 and h == 1 and w == 3:
+            return 'hbar'
+        if len(coords) == 3 and h == 3 and w == 1:
+            return 'vbar'
+        if len(coords) == 3 and h == 2 and w == 2:
+            return 'corner'
+        return None
+
+    saw_emitter = False
+    saw_reflector = False
+    for inp, out in demos:
+        if inp.shape != out.shape:
+            return []
+        supported = True
+        for color in sorted(int(v) for v in np.unique(inp) if v != 0):
+            labels, count = ndimage.label(inp == color, structure=structure)
+            for idx in range(1, count + 1):
+                coords = [tuple(x) for x in np.argwhere(labels == idx).tolist()]
+                kind = _classify(coords)
+                if kind is None:
+                    supported = False
+                    break
+                saw_emitter = saw_emitter or (kind in ('corner', 'point'))
+                saw_reflector = saw_reflector or (kind in ('hbar', 'vbar', 'point'))
+            if not supported:
+                break
+        if not supported:
+            return []
+
+    if not (saw_emitter and saw_reflector):
+        return []
+
+    params = {'point_dir': 'up_right', 'include_direct_hit': True}
+    for inp, out in demos:
+        pred = _exec_diagonal_collision_trace(inp, params)
+        if not np.array_equal(pred, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('diagonal_collision_trace', params)],
+        provenance='derive:diagonal_collision_trace',
     )
     return [prog]
 

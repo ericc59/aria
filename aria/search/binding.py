@@ -380,6 +380,20 @@ def derive_scene_binding(
     binding.roles.extend(legend_cands)
 
     # --- Strategy 3: Object-based entities (for non-separator tasks) ---
+    from aria.search.windows import classify_bar_window_roles, extract_bar_windows_best
+
+    windows = extract_bar_windows_best(inp0, preferred_bg=facts0.bg)
+    if len(windows) >= 2:
+        for i, window in enumerate(windows):
+            binding.entity_grids[EntityRef('window', i)] = window.full_grid
+        for i, role_name, confidence, reason in classify_bar_window_roles(windows):
+            binding.roles.append(RoleAssignment(
+                entity=EntityRef('window', i),
+                role=Role[role_name],
+                confidence=confidence,
+                reason=reason,
+            ))
+
     if len(panels) < 2 and facts0.objects:
         # Group objects by color
         from collections import defaultdict
@@ -414,6 +428,23 @@ def derive_scene_binding(
         for tgt in targets:
             binding.relations.append(EntityRelation(
                 source=leg, target=tgt, relation=Relation.MAPS_TO,
+            ))
+
+    sources = binding.entities_with_role(Role.SOURCE)
+    window_targets = (
+        binding.entities_with_role(Role.TARGET)
+        or binding.entities_with_role(Role.WORKSPACE)
+    )
+    for src in sources:
+        if src.kind != 'window':
+            continue
+        for tgt in window_targets:
+            if tgt.kind != 'window' or tgt == src:
+                continue
+            binding.relations.append(EntityRelation(
+                source=src,
+                target=tgt,
+                relation=Relation.MAPS_TO,
             ))
 
     # Only return binding if we found at least some structure

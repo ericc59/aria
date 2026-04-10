@@ -233,6 +233,11 @@ def build_seed_registry() -> list[SeedSchema]:
     # --- Grid-level transforms ---
     for xform in ('flip_h', 'flip_v', 'flip_hv', 'rot90', 'rot180'):
         seeds.append(SeedSchema(name=xform, action=xform))
+    seeds.append(SeedSchema(
+        name='transpose',
+        action='transpose',
+        requires_same_shape=False,
+    ))
 
     # --- Object actions ---
     seeds.append(SeedSchema(

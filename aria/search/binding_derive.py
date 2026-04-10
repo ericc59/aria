@@ -53,7 +53,13 @@ def derive_from_binding(
     if results:
         return results
 
-    # Strategy 4: object-level legend highlight (P0 shapes → workspace motif match → 8→3)
+    # Strategy 4: ordered legend/control chain connectors in a shared grid
+    progs = _try_legend_chain_connect(demos, binding)
+    results.extend(progs)
+    if results:
+        return results
+
+    # Strategy 5: object-level legend highlight (P0 shapes → workspace motif match → 8→3)
     progs = _try_object_highlight(demos)
     results.extend(progs)
 
@@ -287,30 +293,56 @@ def _try_workspace_crop(demos, binding):
 
 
 # ---------------------------------------------------------------------------
-# Strategy 4: Object-level legend highlight
+# Strategy 4: Ordered legend/control chain connectors
+# ---------------------------------------------------------------------------
+
+def _try_legend_chain_connect(demos, binding):
+    """Connect aligned workspace motifs following a bottom control-strip order."""
+    from aria.guided.perceive import perceive
+    from aria.search.executor import _exec_legend_chain_connect
+
+    if not binding.entities_with_role(Role.CONTROL):
+        return []
+    if not binding.entities_with_role(Role.WORKSPACE):
+        return []
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    params = {'control_side': 'bottom'}
+    changed_any = False
+    for inp, out in demos:
+        facts = perceive(inp)
+        diff = inp != out
+        if not np.any(diff):
+            return []
+        changed_any = True
+        # This task class only paints background cells; it does not erase objects.
+        if np.any(inp[diff] != facts.bg):
+            return []
+        if np.any(out[diff] == facts.bg):
+            return []
+        pred = _exec_legend_chain_connect(inp, params)
+        if not np.array_equal(pred, out):
+            return []
+
+    if not changed_any:
+        return []
+
+    return [SearchProgram(
+        steps=[SearchStep('legend_chain_connect', params)],
+        provenance='binding:legend_chain_connect',
+    )]
+
+
+# ---------------------------------------------------------------------------
+# Strategy 5: Object-level legend highlight
 # ---------------------------------------------------------------------------
 
 def _try_object_highlight(demos):
-    """Legend-driven object highlight with induced symbolic rules.
-
-    P0 is the variable legend panel. Workspace panels P1..Pn contain motif objects.
-
-    Induced rules (verified across all demos):
-    1. shape_match(panel): panel has ≥1 motif whose shape is in P0's shapes
-    2. band_fill(panel): panel.n_motifs < P0.n_motifs AND panel.colors ∩ P0.colors = ∅
-    3. panel_highlight(panel): shape_match OR band_fill
-    4. P0_highlight: any workspace panel is a full_match OR all workspace panels highlight
-
-    Highlight execution:
-    - Full-match panel: entire interior (cols 1..W-2) gets ground→highlight
-    - Partial shape match: slot-width around each matched motif
-    - Band-fill panel: entire interior (cols 1..W-2) gets ground→highlight
-    - P0 when highlighted: entire interior
-    - Separator: first ground-colored row after each highlighted panel
-    - Bottom band: last 2 rows always get ground→highlight
-    """
+    """Legend-driven object highlight with induced symbolic rules."""
     from aria.guided.perceive import perceive
     from aria.search.motif import extract_motifs, extract_panel_facts
+    from aria.search.rules import induce_boolean_dnf
 
     if any(inp.shape != out.shape for inp, out in demos):
         return []
@@ -339,10 +371,83 @@ def _try_object_highlight(demos):
     ground = list(old_vals.keys())[0]
     highlight = list(new_vals.keys())[0]
 
-    # Derive bottom band color: when P0 is NOT highlighted, the bottom band
-    # may use a different color. Learn this from training demos.
+    shape_rows = []
+    shape_labels = []
+    per_demo_panel_facts = []
+    p0_labels = []
+
+    for inp_i, out_i in demos:
+        facts_i = perceive(inp_i)
+        row_seps_i = sorted(set(s.index for s in facts_i.separators if s.axis == 'row'))
+        if len(row_seps_i) < 4:
+            return []
+        r_bounds_i = [0] + row_seps_i + [inp_i.shape[0]]
+        panels_i = [
+            (r_bounds_i[j], r_bounds_i[j + 1])
+            for j in range(len(r_bounds_i) - 1)
+            if r_bounds_i[j + 1] - r_bounds_i[j] >= 3
+        ]
+        if len(panels_i) < 3:
+            return []
+
+        r0_p0, r1_p0 = panels_i[0]
+        p0_panel = inp_i[r0_p0:r1_p0, :]
+        p0_motifs = extract_motifs(p0_panel, bg=0, ground=ground, min_cells=2)
+        p0_shapes = frozenset(m.motif for m in p0_motifs)
+        p0_colors = frozenset(m.color for m in p0_motifs)
+        p0_n = len(p0_motifs)
+
+        ws_facts = []
+        ws_changed = []
+        for pi, (r0, r1) in enumerate(panels_i[1:], 1):
+            pf = extract_panel_facts(
+                inp_i[r0:r1, :],
+                pi,
+                p0_shapes,
+                p0_colors,
+                p0_n,
+                bg=0,
+                ground=ground,
+            )
+            ws_facts.append(pf)
+            changed = _panel_has_highlight(inp_i[r0:r1, :], out_i[r0:r1, :], ground, highlight)
+            ws_changed.append(changed)
+            shape_rows.append(pf.to_rule_dict())
+            shape_labels.append(bool(pf.any_match and changed))
+
+        per_demo_panel_facts.append((ws_facts, ws_changed))
+        p0_labels.append(_panel_has_highlight(p0_panel, out_i[r0_p0:r1_p0, :], ground, highlight))
+
+    shape_rule = induce_boolean_dnf(
+        shape_rows,
+        shape_labels,
+        candidate_fields=['any_match', 'full_match', 'fewer_motifs', 'color_disjoint'],
+        max_clause_size=2,
+        max_clauses=2,
+    )
+    if shape_rule is None:
+        return []
+
+    aggregate_rows = []
+    for ws_facts, ws_changed in per_demo_panel_facts:
+        aggregate_rows.append({
+            'any_full_match': any(pf.full_match for pf in ws_facts),
+            'all_ws_highlight': bool(ws_changed) and all(ws_changed),
+        })
+
+    p0_rule = induce_boolean_dnf(
+        aggregate_rows,
+        p0_labels,
+        candidate_fields=['any_full_match', 'all_ws_highlight'],
+        max_clause_size=2,
+        max_clauses=2,
+    )
+    if p0_rule is None:
+        return []
+
+    # Derive bottom band color: when P0 is not highlighted, the bottom band may
+    # use a different color. Learn this from training demos.
     from aria.search.sketch import _exec_object_highlight_full
-    from aria.search.motif import extract_motifs as _em, extract_panel_facts as _epf
 
     bottom_alt_color = None
     for inp_i, out_i in demos:
@@ -354,7 +459,12 @@ def _try_object_highlight(demos):
             bottom_alt_color = list(bb_colors)[0]
             break
 
-    params = {'ground': ground, 'highlight': highlight}
+    params = {
+        'ground': ground,
+        'highlight': highlight,
+        'shape_rule': shape_rule.to_dict(),
+        'p0_rule': p0_rule.to_dict(),
+    }
     if bottom_alt_color is not None:
         params['bottom_alt_color'] = bottom_alt_color
 
@@ -369,3 +479,14 @@ def _try_object_highlight(demos):
         provenance='binding:object_highlight',
     )
     return [prog]
+
+
+def _panel_has_highlight(
+    inp_panel: np.ndarray,
+    out_panel: np.ndarray,
+    ground: int,
+    highlight: int,
+) -> bool:
+    """Whether a panel gained highlight-colored ground cells."""
+    changed = (inp_panel == ground) & (out_panel == highlight)
+    return bool(np.any(changed))
