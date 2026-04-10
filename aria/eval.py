@@ -92,7 +92,8 @@ def evaluate_task(
 
     outcome: dict[str, Any] = {
         "task_id": task_id,
-        "solved": result["program"] is not None,
+        "solved": False,
+        "program_found": result["program"] is not None,
         "time_sec": round(elapsed, 2),
         "retrieved": False,
         "searched": result["source"] in ("search", None),
@@ -107,7 +108,7 @@ def evaluate_task(
         "abstraction_hints_available": False,
     }
 
-    if outcome["solved"]:
+    if outcome["program_found"]:
         program = result["program"]
         test_outputs = _execute_on_test(task, program)
         program_text = _program_text(program)
@@ -115,18 +116,38 @@ def evaluate_task(
         outcome["description"] = result.get("description", "")
         outcome["test_outputs"] = [g.tolist() for g in test_outputs]
         test_results = []
+        known_test_correct = []
         for idx, (test_pair, output) in enumerate(zip(task.test, test_outputs)):
-            correct = grid_eq(output, test_pair.output)
-            test_results.append({"test_idx": idx, "correct": correct})
-        outcome["test_results"] = test_results
-        outcome["library_ops_used"] = extract_library_ops_used(program_text, [])
-        if trace_store is not None:
-            trace_store.add_search_result(
-                task_id=task_id,
-                solved=True,
-                winning_program_text=program_text,
-                task_signatures=task_signatures,
+            correct = (
+                grid_eq(output, test_pair.output)
+                if test_pair.output is not None else None
             )
+            test_results.append({"test_idx": idx, "correct": correct})
+            if correct is not None:
+                known_test_correct.append(correct)
+        outcome["test_results"] = test_results
+        outcome["solved"] = all(known_test_correct) if known_test_correct else True
+        outcome["library_ops_used"] = extract_library_ops_used(program_text, [])
+        if outcome["solved"]:
+            if trace_store is not None:
+                trace_store.add_search_result(
+                    task_id=task_id,
+                    solved=True,
+                    winning_program_text=program_text,
+                    task_signatures=task_signatures,
+                )
+        else:
+            outcome["failure_bucket"] = "test_mismatch"
+            cluster = classify_failure_cluster(outcome)
+            outcome["failure_cluster"] = cluster["primary"]
+            if cluster["secondary"]:
+                outcome["failure_cluster_hints"] = cluster["secondary"]
+            if trace_store is not None:
+                trace_store.add_search_result(
+                    task_id=task_id,
+                    solved=False,
+                    task_signatures=task_signatures,
+                )
     else:
         outcome["failure_bucket"] = "search_budget_exhausted"
         cluster = classify_failure_cluster(outcome)

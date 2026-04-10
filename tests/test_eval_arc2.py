@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import aria.eval as eval_module
 from aria.datasets import DatasetInfo
 from aria.eval import (
     EvalConfig,
@@ -16,6 +17,7 @@ from aria.eval import (
 )
 from aria.library.store import Library
 from aria.program_store import ProgramStore
+from aria.search.sketch import SearchProgram, SearchStep
 from aria.trace_store import RefinementTraceStore
 from aria.types import DemoPair, Task, grid_from_list
 
@@ -113,6 +115,39 @@ def test_evaluate_task_with_beam():
     )
     assert not outcome["solved"]
     # beam ran but didn't solve — that's fine, just no crash
+
+
+def test_recolor_map_executes_after_ast_lowering():
+    inp = grid_from_list([[1, 2], [2, 1]])
+    expected = grid_from_list([[3, 4], [4, 3]])
+    prog = SearchProgram(
+        steps=[SearchStep("recolor_map", {"color_map": {1: 3, 2: 4}})],
+        provenance="derive:color_map",
+    )
+    assert (prog.execute(inp) == expected).all()
+
+
+def test_evaluate_task_requires_public_test_correctness(monkeypatch):
+    task = Task(
+        train=(DemoPair(input=grid_from_list([[1]]), output=grid_from_list([[1]])),),
+        test=(DemoPair(input=grid_from_list([[1]]), output=grid_from_list([[2]])),),
+    )
+    wrong_prog = SearchProgram(steps=[], provenance="identity")
+
+    def fake_solve_task(*args, **kwargs):
+        return {"program": wrong_prog, "source": "search", "description": "identity"}
+
+    monkeypatch.setattr(eval_module, "solve_task", fake_solve_task)
+    outcome = evaluate_task(
+        "t_public_mismatch",
+        task,
+        library=Library(),
+        config=EvalConfig(),
+    )
+    assert not outcome["solved"]
+    assert outcome["program_found"]
+    assert outcome["failure_bucket"] == "test_mismatch"
+    assert outcome["test_results"] == [{"test_idx": 0, "correct": False}]
 
 
 # --- run_evaluation ---

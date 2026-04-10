@@ -89,6 +89,7 @@ class Op(Enum):
     LINE_ARITH_BROADCAST = auto()      # Grid → Grid  param: {axis: 'auto'|'row'|'col'}
     BARRIER_PORT_TRANSFER = auto()     # Grid → Grid  param: {mode: 'auto'}
     CAVITY_TRANSFER = auto()           # Grid → Grid  param: {mode: 'auto'}
+    RECOLOR_MAP = auto()               # Grid → Grid  param: {old_color: new_color}
 
     # Object-level actions
     RECOLOR = auto()        # param: (selector_preds, new_color)

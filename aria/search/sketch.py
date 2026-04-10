@@ -513,9 +513,9 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.CAVITY_TRANSFER, [ASTNode(Op.INPUT)], param=p)
 
     if action == 'recolor_map':
-        return ASTNode(Op.RECOLOR, [ASTNode(Op.INPUT)], param=p)
+        return ASTNode(Op.RECOLOR_MAP, [ASTNode(Op.INPUT)], param=p.get('color_map', {}))
 
-    if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'recolor_map', 'color_stencil'):
+    if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 

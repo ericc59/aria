@@ -269,6 +269,12 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         params = node.param or {}
         return _exec_frame_bbox_pack_ast(grid, params)
 
+    if op == Op.RECOLOR_MAP:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_recolor_map_ast(grid, node.param)
+
     if op == Op.QUADRANT_TEMPLATE_DECODE:
         grid = _child(node, 0, inp, ctx)
         if grid is None:
@@ -456,6 +462,20 @@ def _exec_recolor(node, inp, ctx):
             for c in range(obj.width):
                 if obj.mask[r, c]:
                     result[obj.row + r, obj.col + c] = new_color
+    return result
+
+
+def _exec_recolor_map_ast(grid, color_map):
+    """Apply a global color substitution map through the AST path."""
+    if not color_map:
+        return grid
+    cmap = {int(k): int(v) for k, v in dict(color_map).items()}
+    result = grid.copy()
+    for r in range(result.shape[0]):
+        for c in range(result.shape[1]):
+            v = int(result[r, c])
+            if v in cmap:
+                result[r, c] = cmap[v]
     return result
 
 

@@ -14,6 +14,8 @@
 - added a small candidate-ranking layer for `aria/search`: seed and composition candidates are now reordered by generic verifier-style partial scores plus proposal prior strength before exact verification
 - added `proposal_corpus.py` and `scripts/build_search_corpus.py` to mine solved search outcomes into a JSONL corpus keyed by task signatures and solved families, so future learned proposal/ranking work has an explicit offline dataset
 - added a tiny trainable `SearchFamilyModel` (Bernoulli NB over task signatures) plus `scripts/build_search_model.py`; candidate ranking can now use a persisted family model as an additional amortized proposal signal
+- fixed the AST contract for `recolor_map`: global color substitution now has its own canonical AST op/executor path instead of mislowering to object-level `RECOLOR`
+- tightened public eval accounting: `aria/eval.py` now treats a task as solved only when known test outputs are correct, preventing false solves from polluting refreshed reports and learned search priors
 
 ## 2026-04-09
 
