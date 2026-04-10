@@ -1,5 +1,11 @@
 ## 2026-04-10
 
+- added `aria/search/selection_facts.py`: rich per-object boolean fact extraction (31 structural features + per-color) for derive-time selector rule induction
+- added `Pred.SELECTION_RULE` and `StepSelect('by_rule')`: conjunction/DNF selectors induced via `induce_boolean_dnf` over pooled cross-demo object facts, enabling richer selection conditions than the previous single-predicate path
+- upgraded `_find_selector_for_group` with cross-demo verification: selectors found on demo 0 are now verified against all demos before use, falling back to cross-demo rule induction when simple predicates don't generalize
+- upgraded `_find_selector` with rule induction fallback: when no single predicate exactly separates target objects, bounded conjunction search (up to 3 atoms) over structural facts is attempted
+- added canonical `TEMPLATE_BROADCAST`: mask-driven blockwise template placement (out = kron(input != bg, input)); `007bbfb7` now solves via search stack in 0.02s
+- filled 6 missing low-level AST executor cases: `SLIDE`, `STAMP`, `TRANSFORM_OBJ`, `FILL_INTERIOR`, `FILL_ENCLOSED`, `PERIODIC_EXTEND` — all had AST lowering paths from search but no executor dispatch
 - admission audit: quarantined `STACKED_GLYPH_TRACE` from canonical `aria/search`; it depended on a task-local glyph codebook rather than a reusable execution primitive
 - admission audit: quarantined `CORNER_DIAG_FILL` from canonical `aria/search`; hidden-eval success depended on a room-level fallback that did not meet the generality bar
 - retained `DIAGONAL_COLLISION_TRACE`, `MASKED_PATCH_TRANSFER`, `SEPARATOR_MOTIF_BROADCAST`, `LINE_ARITH_BROADCAST`, and `BARRIER_PORT_TRANSFER` as the current defensible additions from this wave

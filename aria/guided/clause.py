@@ -69,6 +69,9 @@ class Pred(Enum):
     # Combinator
     NOT = auto()               # param: Predicate — negation
 
+    # Rule-based (from selection_facts induction)
+    SELECTION_RULE = auto()    # param: rule_dict (DNF over boolean object facts)
+
 
 @dataclass(frozen=True)
 class Predicate:
@@ -115,6 +118,11 @@ class Predicate:
         if self.pred == Pred.NOT:
             inner = self.param  # a Predicate
             return not inner.test(obj, all_objs, pairs)
+
+        # Rule-based selector (DNF over boolean object facts)
+        if self.pred == Pred.SELECTION_RULE:
+            from aria.search.selection_facts import check_rule_on_object
+            return check_rule_on_object(self.param, obj, all_objs, pairs)
 
         # Relational predicates — check if ANY other object satisfying
         # self.param has the specified relation to obj

@@ -1281,6 +1281,15 @@ def _resolve_selector(sel, facts):
     if sel.role == 'all':
         return set(o.oid for o in facts.objects)
 
+    if sel.role == 'by_rule':
+        from aria.search.selection_facts import select_by_rule
+        return set(o.oid for o in select_by_rule(sel.params.get('rule', {}), facts))
+
+    if sel.role == 'by_predicate':
+        preds = sel.params.get('predicates', [])
+        if preds:
+            return set(o.oid for o in prim_select(facts, preds))
+
     return None
 
 
@@ -1369,16 +1378,110 @@ def _derive_stamp(all_transitions, all_facts, demos):
 # ---------------------------------------------------------------------------
 
 def _find_selector_for_group(all_transitions, all_facts, match_type):
-    """Find a StepSelect that selects all objects of a given match_type in demo 0."""
+    """Find a StepSelect that selects all objects of a given match_type.
+
+    Tries simple predicates on demo 0 first (fast path). If found,
+    verifies it works across all demos. Falls back to cross-demo
+    rule induction over rich boolean object facts.
+    """
     oids = set(t.in_obj.oid for t in all_transitions[0]
                if t.match_type == match_type and t.in_obj)
     if not oids:
         return None
-    return _find_selector(oids, all_facts[0])
+
+    # Fast path: simple selector from demo 0
+    sel = _find_selector(oids, all_facts[0])
+    if sel is not None:
+        # Cross-demo verification
+        ok = True
+        for di in range(1, len(all_transitions)):
+            expected = {t.in_obj.oid for t in all_transitions[di]
+                        if t.match_type == match_type and t.in_obj}
+            selected = _resolve_selector(sel, all_facts[di])
+            if selected is None or selected != expected:
+                ok = False
+                break
+        if ok:
+            return sel
+
+    # Slow path: cross-demo rule induction
+    return _find_selector_cross_demo(match_type, all_transitions, all_facts)
+
+
+def _find_selector_cross_demo(match_type, all_transitions, all_facts):
+    """Induce a selection rule over rich boolean facts across all demos.
+
+    Pools object facts from all demos, labels targets by match_type,
+    and finds a bounded DNF rule that exactly separates them.
+    """
+    from aria.search.selection_facts import extract_object_facts
+    from aria.search.rules import induce_boolean_dnf
+
+    all_rows = []
+    all_labels = []
+
+    for di in range(len(all_transitions)):
+        target_oids = {t.in_obj.oid for t in all_transitions[di]
+                       if t.match_type == match_type and t.in_obj}
+        fact_rows = extract_object_facts(all_facts[di])
+        for obj, row in zip(all_facts[di].objects, fact_rows):
+            all_rows.append(row)
+            all_labels.append(obj.oid in target_oids)
+
+    if not any(all_labels):
+        return None
+    if all(all_labels):
+        return StepSelect('all')
+
+    # Structural features only first (fast); add per-color only if needed
+    from aria.search.selection_facts import STRUCTURAL_FEATURES
+    candidate_fields = list(STRUCTURAL_FEATURES)
+
+    # Fill missing with False
+    for row in all_rows:
+        for f in candidate_fields:
+            if f not in row:
+                row[f] = False
+
+    # Try structural-only conjunction (fast: ~30 features)
+    rule = induce_boolean_dnf(
+        all_rows, all_labels,
+        candidate_fields=candidate_fields,
+        max_clause_size=3,
+        max_clauses=1,
+    )
+    if rule is not None:
+        return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    # Add per-color features and try again with size-2 conjunctions
+    all_features: set[str] = set()
+    for row in all_rows:
+        all_features.update(row.keys())
+    color_fields = sorted(f for f in all_features if f.startswith('color_is_'))
+    extended_fields = candidate_fields + color_fields
+    for row in all_rows:
+        for f in extended_fields:
+            if f not in row:
+                row[f] = False
+
+    rule = induce_boolean_dnf(
+        all_rows, all_labels,
+        candidate_fields=extended_fields,
+        max_clause_size=2,
+        max_clauses=1,
+    )
+    if rule is None:
+        return None
+
+    return StepSelect('by_rule', {'rule': rule.to_dict()})
 
 
 def _find_selector(oids, facts):
-    """Find a StepSelect that selects exactly the given object IDs."""
+    """Find a StepSelect that selects exactly the given object IDs.
+
+    Tries simple single-predicate selectors first (fast). Falls back
+    to bounded rule induction over rich boolean object facts.
+    """
     from aria.guided.dsl import prim_select
     from aria.guided.clause import Predicate, Pred
 
@@ -1441,7 +1544,62 @@ def _find_selector(oids, facts):
     if target_set == set(o.oid for o in facts.objects):
         return StepSelect('all')
 
+    # Rule induction: bounded conjunction search over rich boolean facts
+    sel = _induce_selector_rule(target_set, facts)
+    if sel is not None:
+        return sel
+
     return None
+
+
+def _induce_selector_rule(target_set, facts):
+    """Induce a DNF selection rule from a single demo's facts."""
+    from aria.search.selection_facts import extract_object_facts, STRUCTURAL_FEATURES
+    from aria.search.rules import induce_boolean_dnf
+
+    fact_rows = extract_object_facts(facts)
+    labels = [obj.oid in target_set for obj in facts.objects]
+
+    if not any(labels) or all(labels):
+        return None
+
+    # Structural features only (bounded, fast)
+    candidate_fields = list(STRUCTURAL_FEATURES)
+    for row in fact_rows:
+        for f in candidate_fields:
+            if f not in row:
+                row[f] = False
+
+    rule = induce_boolean_dnf(
+        fact_rows, labels,
+        candidate_fields=candidate_fields,
+        max_clause_size=3,
+        max_clauses=1,
+    )
+    if rule is not None:
+        return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    # Add per-color features, try size-2 conjunctions
+    all_features: set[str] = set()
+    for row in fact_rows:
+        all_features.update(row.keys())
+    color_fields = sorted(f for f in all_features if f.startswith('color_is_'))
+    extended_fields = candidate_fields + color_fields
+    for row in fact_rows:
+        for f in extended_fields:
+            if f not in row:
+                row[f] = False
+
+    rule = induce_boolean_dnf(
+        fact_rows, labels,
+        candidate_fields=extended_fields,
+        max_clause_size=2,
+        max_clauses=1,
+    )
+    if rule is None:
+        return None
+
+    return StepSelect('by_rule', {'rule': rule.to_dict()})
 
 
 # ---------------------------------------------------------------------------

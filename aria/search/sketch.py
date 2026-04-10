@@ -96,6 +96,8 @@ class StepSelect:
             return [Predicate(Pred.SIZE_GT, 0)]
         if role == 'by_predicate':
             return self.params.get('predicates', [])
+        if role == 'by_rule':
+            return [Predicate(Pred.SELECTION_RULE, self.params.get('rule', {}))]
         return []
 
 
