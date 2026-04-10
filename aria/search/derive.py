@@ -560,11 +560,24 @@ def _derive_conditional_dispatch(all_transitions, all_facts, demos):
     bg = _infer_bg_from_demos(demos)
 
     for partition in _candidate_partitions(changed_0, all_facts[0]):
+        # Cross-demo validation: verify the partition holds in ALL demos.
+        # The same selector must pick objects with the same match_type in every demo.
+        if not _partition_generalizes(partition, all_transitions, all_facts):
+            continue
+
         steps = []
         ok = True
         for sel, group_oids in partition:
-            group_trans = [t for t in changed_0 if t.in_obj and t.in_obj.oid in group_oids]
-            step = _derive_group_step(group_trans, sel, all_transitions, all_facts, demos, bg)
+            group_trans_demo0 = [t for t in changed_0 if t.in_obj and t.in_obj.oid in group_oids]
+            # Gather same-selector transitions across ALL demos
+            all_group_trans = [group_trans_demo0]
+            for di in range(1, len(all_transitions)):
+                sel_oids = _resolve_selector(sel, all_facts[di])
+                if sel_oids:
+                    gt = [t for t in all_transitions[di]
+                          if t.in_obj and t.in_obj.oid in sel_oids and t.match_type != 'identical']
+                    all_group_trans.append(gt)
+            step = _derive_group_step_multi(all_group_trans, sel, demos, bg)
             if step is None:
                 ok = False
                 break
@@ -579,6 +592,29 @@ def _derive_conditional_dispatch(all_transitions, all_facts, demos):
             return results
 
     return results
+
+
+def _partition_generalizes(partition, all_transitions, all_facts):
+    """Check that a partition's selectors produce consistent action groups in ALL demos."""
+    for demo_idx in range(1, len(all_transitions)):
+        facts = all_facts[demo_idx]
+        trans = all_transitions[demo_idx]
+        trans_by_oid = {t.in_obj.oid: t for t in trans if t.in_obj}
+
+        for sel, expected_oids in partition:
+            selected = _resolve_selector(sel, facts)
+            if selected is None or not selected:
+                return False
+
+            # All selected CHANGED objects must have the SAME match_type
+            group_mtypes = set()
+            for oid in selected:
+                if oid in trans_by_oid and trans_by_oid[oid].match_type != 'identical':
+                    group_mtypes.add(trans_by_oid[oid].match_type)
+            if len(group_mtypes) > 1:
+                return False
+
+    return True
 
 
 def _infer_bg_from_demos(demos):
@@ -716,6 +752,78 @@ def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos, bg=N
         xforms = set(t.transform for t in group_trans if t.transform)
         if len(xforms) == 1:
             return SearchStep('transform', {'xform': next(iter(xforms))}, sel)
+        return None
+
+    return None
+
+
+def _derive_group_step_multi(all_group_trans, sel, demos, bg=None):
+    """Derive a SearchStep from a group's transitions across ALL demos.
+
+    Uses multi-demo evidence to detect variable-offset patterns (gravity/slide)
+    that single-demo analysis would miss.
+    """
+    if not all_group_trans or not all_group_trans[0]:
+        return None
+
+    # All demos must have the same match_type for this group
+    mtypes = set()
+    for gt in all_group_trans:
+        for t in gt:
+            if t.match_type != 'identical':
+                mtypes.add(t.match_type)
+    if len(mtypes) != 1:
+        return None
+    mtype = next(iter(mtypes))
+
+    if mtype == 'removed':
+        params = {'bg': bg} if bg is not None else {}
+        return SearchStep('remove', params, sel)
+
+    if mtype == 'recolored':
+        # Check: same target color across ALL demos
+        all_colors = set()
+        for gt in all_group_trans:
+            for t in gt:
+                all_colors.add(t.color_to)
+        if len(all_colors) == 1:
+            return SearchStep('recolor', {'color': next(iter(all_colors))}, sel)
+        return None
+
+    if mtype in ('moved', 'moved_recolored'):
+        # Collect offsets from ALL demos
+        all_offsets = []
+        for gt in all_group_trans:
+            for t in gt:
+                all_offsets.append((t.dr, t.dc))
+
+        offset_set = set(all_offsets)
+        if len(offset_set) == 1:
+            dr, dc = next(iter(offset_set))
+            return SearchStep('move', {'dr': dr, 'dc': dc}, sel)
+
+        # Variable offsets → try gravity (same direction, variable distance)
+        flat = [t for gt in all_group_trans for t in gt]
+        rows, cols = demos[0][0].shape
+        gdir = _detect_gravity(flat, rows, cols)
+        if gdir:
+            return SearchStep('gravity', {'direction': gdir}, sel)
+
+        sdir = _detect_slide_direction(flat)
+        if sdir:
+            return SearchStep('slide', {'direction': sdir}, sel)
+
+        # Try gravity_nearest (each object moves to nearest border)
+        return SearchStep('gravity_nearest', {'axis': 'both'}, sel)
+
+    if mtype == 'transformed':
+        all_xforms = set()
+        for gt in all_group_trans:
+            for t in gt:
+                if t.transform:
+                    all_xforms.add(t.transform)
+        if len(all_xforms) == 1:
+            return SearchStep('transform', {'xform': next(iter(all_xforms))}, sel)
         return None
 
     return None
