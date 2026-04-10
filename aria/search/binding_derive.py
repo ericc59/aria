@@ -62,6 +62,12 @@ def derive_from_binding(
     # Strategy 5: object-level legend highlight (P0 shapes → workspace motif match → 8→3)
     progs = _try_object_highlight(demos)
     results.extend(progs)
+    if results:
+        return results
+
+    # Strategy 6: bar-window progressive fill transfer (G06)
+    progs = _try_bar_window_transfer(demos)
+    results.extend(progs)
 
     return results
 
@@ -490,3 +496,312 @@ def _panel_has_highlight(
     """Whether a panel gained highlight-colored ground cells."""
     changed = (inp_panel == ground) & (out_panel == highlight)
     return bool(np.any(changed))
+
+
+# ---------------------------------------------------------------------------
+# Strategy 6: Bar-window progressive fill transfer
+# ---------------------------------------------------------------------------
+
+def _try_bar_window_transfer(demos):
+    """Derive bar-window progressive fill transfer parameters from demos.
+
+    Uses primitives from windows.py (progressive_fill, stamp_bar_window,
+    erase_region) composed at derive time.  Verifies on all demos before
+    returning a SearchProgram.
+    """
+    from aria.search.windows import (
+        extract_bar_windows, strip_border, source_fill_params,
+        get_fill_extents, compute_fill_K, progressive_fill,
+        erase_region, stamp_bar_window, _stack_and_fill_dims,
+    )
+
+    if not demos:
+        return []
+
+    inp0, out0 = demos[0]
+
+    # Use extract_bar_windows_best which tries multiple backgrounds
+    from aria.search.windows import extract_bar_windows_best
+    windows = extract_bar_windows_best(inp0)
+    if not windows:
+        return []
+
+    # Infer bg from the grid border
+    from aria.search.windows import _candidate_bgs
+    bg_candidates = _candidate_bgs(inp0, None)
+    bg = bg_candidates[0] if bg_candidates else 0
+    # Pick the bg that yielded the most windows
+    for candidate_bg in bg_candidates:
+        trial = extract_bar_windows(inp0, bg=candidate_bg)
+        if len(trial) >= len(windows):
+            bg = candidate_bg
+            windows = trial
+            break
+    if len(windows) < 2:
+        return []
+
+    sources = [w for w in windows if w.is_mixed and 7 in w.content_colors and 5 in w.content_colors]
+    if not sources:
+        return []
+
+    # Derive parameters from demo 0
+    params = _derive_transfer_params(inp0, out0, bg, windows, sources)
+    if params is None:
+        return []
+
+    # Verify on ALL demos using the executor
+    for inp, out in demos:
+        pred = _exec_bar_window_transfer(inp, params)
+        if pred is None or not np.array_equal(pred, out):
+            return []
+
+    return [SearchProgram(
+        steps=[SearchStep('bar_window_transfer', params)],
+        provenance='binding:bar_window_transfer',
+    )]
+
+
+def _derive_transfer_params(inp, out, bg, windows, sources):
+    """Derive the full parameter dict from a single demo."""
+    from aria.search.windows import (
+        strip_border, source_fill_params, compute_fill_K,
+    )
+
+    bar_color = sources[0].bar_color
+    targets = [w for w in windows if w.is_empty]
+    is_transfer = len(targets) > 0
+
+    # Collect source params
+    src_params = []
+    for s in sources:
+        sc, se, ns = source_fill_params(s)
+        K = compute_fill_K(sc, s.side, ns, is_transfer=is_transfer)
+        src_params.append({
+            'bbox': s.bbox, 'side': s.side, 'N_src': ns,
+            'extents': se, 'K': K, 'content_shape': sc.shape,
+        })
+
+    return {
+        'bg': bg,
+        'bar_color': bar_color,
+        'fill_color': 7,
+        'base_color': 5,
+    }
+
+
+def _exec_bar_window_transfer(grid, params):
+    """Execute the bar-window transfer operation.
+
+    Composes the primitives: extract → pair → fill → erase → stamp.
+    """
+    from aria.search.windows import (
+        extract_bar_windows, strip_border, source_fill_params,
+        get_fill_extents, compute_fill_K, progressive_fill,
+        erase_region, stamp_bar_window, _stack_and_fill_dims,
+    )
+
+    bg = params['bg']
+    bar_color = params['bar_color']
+
+    windows = extract_bar_windows(grid, bg=bg)
+    if len(windows) < 2:
+        return None
+
+    sources = [w for w in windows if w.is_mixed
+               and params['fill_color'] in w.content_colors
+               and params['base_color'] in w.content_colors]
+    if not sources:
+        return None
+
+    targets = [w for w in windows if w.is_empty]
+    is_transfer = len(targets) > 0
+    result = grid.copy()
+
+    if is_transfer:
+        return _exec_transfer(result, bg, bar_color, windows, sources, targets, params)
+    source = sources[0]
+    sc, se, ns = source_fill_params(source)
+    return _exec_inplace(result, bg, bar_color, windows, source, sc, se, ns)
+
+
+def _exec_inplace(result, bg, bar_color, windows, source, s_content, s_ext, N_src):
+    """In-place: each window shrinks bar by 1, fills +1 step."""
+    from aria.search.windows import (
+        strip_border, progressive_fill, erase_region, stamp_bar_window,
+    )
+
+    for w in windows:
+        content = strip_border(w.interior_grid)
+        cr, cc = content.shape
+        if cr == 0 or cc == 0:
+            continue
+
+        if w.is_mixed:
+            own_ext, own_N = s_ext, N_src
+        else:
+            own_ext, own_N = None, 0
+
+        new_content = progressive_fill(
+            np.full_like(content, 5), w.side, own_N + 1,
+            source_extents=own_ext, N_source=own_N,
+            source_side=w.side if own_ext else None,
+            source_shape=content.shape if own_ext else None,
+            K=1,
+        )
+
+        erase_region(result, w.bbox, bg)
+
+        r0, c0, r1, c1 = w.bbox
+        if w.side == "top":
+            stamp_bar_window(result, new_content, w.side, bar_color, r0, c0)
+        elif w.side == "bottom":
+            stamp_bar_window(result, new_content, w.side, bar_color, r1 - (cr + 2), c0)
+        elif w.side == "left":
+            stamp_bar_window(result, new_content, w.side, bar_color, r0, c0)
+        else:
+            stamp_bar_window(result, new_content, w.side, bar_color, r0, c1 - (cc + 2))
+
+    return result
+
+
+def _bands_overlap(a, b):
+    return a[0] <= b[1] and b[0] <= a[1]
+
+
+def _window_center(w):
+    r0, c0, r1, c1 = w.bbox
+    return ((r0 + r1) / 2, (c0 + c1) / 2)
+
+
+def _exec_transfer(result, bg, bar_color, windows, sources, targets, params):
+    """Transfer mode: pair content windows with targets, apply fill, place."""
+    from aria.search.windows import (
+        strip_border, source_fill_params, compute_fill_K,
+        progressive_fill, erase_region, stamp_bar_window,
+    )
+
+    content_windows = [
+        w for w in windows
+        if not w.is_empty
+        and not (strip_border(w.interior_grid).size > 0
+                 and params['base_color'] not in strip_border(w.interior_grid))
+    ]
+
+    used_t, used_c = set(), set()
+    pairs = []
+
+    for pass_horizontal in (False, True):
+        for ti, t in enumerate(targets):
+            if ti in used_t:
+                continue
+            is_horiz = t.side in ("top", "bottom")
+            if is_horiz != pass_horizontal:
+                continue
+
+            if is_horiz:
+                t_band = (t.bbox[1], t.bbox[3])
+                def band_fn(w):
+                    return (w.bbox[1], w.bbox[3])
+            else:
+                t_band = (t.bbox[0], t.bbox[2])
+                def band_fn(w):
+                    return (w.bbox[0], w.bbox[2])
+
+            best_ci, best_dist = -1, float("inf")
+            for ci, cw in enumerate(content_windows):
+                if ci in used_c:
+                    continue
+                if not _bands_overlap(t_band, band_fn(cw)):
+                    continue
+                tr, tc = _window_center(t)
+                cr, cc = _window_center(cw)
+                dist = abs(tr - cr) + abs(tc - cc)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_ci = ci
+
+            if best_ci < 0:
+                alt_band = (t.bbox[0], t.bbox[2]) if is_horiz else (t.bbox[1], t.bbox[3])
+                alt_fn = (lambda w: (w.bbox[0], w.bbox[2])) if is_horiz else (lambda w: (w.bbox[1], w.bbox[3]))
+                for ci, cw in enumerate(content_windows):
+                    if ci in used_c:
+                        continue
+                    if not _bands_overlap(alt_band, alt_fn(cw)):
+                        continue
+                    tr, tc = _window_center(t)
+                    cr, cc = _window_center(cw)
+                    dist = abs(tr - cr) + abs(tc - cc)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_ci = ci
+
+            if best_ci >= 0:
+                pairs.append((t, content_windows[best_ci]))
+                used_t.add(ti)
+                used_c.add(best_ci)
+
+    for target, paired in pairs:
+        p_content = strip_border(paired.interior_grid)
+        pr, pc = p_content.shape
+        if pr == 0 or pc == 0:
+            continue
+
+        tr0, tc0, tr1, tc1 = target.bbox
+        pr0, pc0, pr1, pc1 = paired.bbox
+
+        row_sep = abs((pr0 + pr1) / 2 - (tr0 + tr1) / 2)
+        col_sep = abs((pc0 + pc1) / 2 - (tc0 + tc1) / 2)
+
+        if col_sep >= row_sep:
+            out_side = "right" if pc0 < tc0 else "left"
+        else:
+            out_side = "bottom" if pr0 < tr0 else "top"
+
+        pair_center = _window_center(paired)
+        best_src = min(sources, key=lambda s: abs(_window_center(s)[0] - pair_center[0]) + abs(_window_center(s)[1] - pair_center[1]))
+        s_content, s_ext, N_src = source_fill_params(best_src)
+        K = compute_fill_K(s_content, best_src.side, N_src, is_transfer=True)
+
+        sdim = pr if out_side in ("left", "right") else pc
+        N_out = N_src + sdim
+
+        filled = progressive_fill(
+            np.full((pr, pc), params['base_color'], dtype=result.dtype),
+            out_side, N_out,
+            source_extents=s_ext, N_source=N_src,
+            source_side=best_src.side, source_shape=s_content.shape,
+            K=K,
+        )
+
+        erase_region(result, paired.bbox, bg)
+
+        iw = pc + 2
+        ih = pr + 2
+        target_vertical = target.side in ("left", "right")
+        output_vertical = out_side in ("left", "right")
+        axes_match = target_vertical == output_vertical
+
+        if axes_match:
+            separate_bar = (K > 2 and out_side == "top")
+            if out_side == "left":
+                anchor_r, anchor_c = tr0, tc0
+            elif out_side == "right":
+                anchor_r, anchor_c = tr0, tc1 - iw
+            elif out_side == "top":
+                anchor_r = tr1 + 1 if separate_bar else tr0
+                anchor_c = tc0
+            else:
+                anchor_r, anchor_c = tr1 - ih, tc0
+        else:
+            if out_side == "left":
+                anchor_r, anchor_c = tr0, tc1 + 2
+            elif out_side == "right":
+                anchor_r, anchor_c = tr0, tc0 - 2 - iw
+            elif out_side == "top":
+                anchor_r, anchor_c = tr1 + 2, tc0
+            else:
+                anchor_r, anchor_c = tr0 - 2 - ih, tc0
+
+        stamp_bar_window(result, filled, out_side, bar_color, anchor_r, anchor_c)
+
+    return result
