@@ -85,6 +85,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    # Strategy 0: Global color map (simple substitution, no object analysis needed)
+    progs = _derive_color_map(demos)
+    if progs:
+        return progs
+
     # Compute transitions for all demos
     all_transitions = []
     all_facts = []
@@ -126,6 +131,48 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
 # ---------------------------------------------------------------------------
 # Strategy 1: Uniform transition
 # ---------------------------------------------------------------------------
+
+def _derive_color_map(demos):
+    """Derive a global color substitution map.
+
+    If every cell's change can be explained by a consistent color→color lookup
+    table across all demos, emit a single-step recolor_map program.
+    """
+    color_map = {}
+    for inp, out in demos:
+        if inp.shape != out.shape:
+            return []
+        diff = inp != out
+        if not np.any(diff):
+            return []
+        for r, c in zip(*np.where(diff)):
+            ic, oc = int(inp[r, c]), int(out[r, c])
+            if ic in color_map:
+                if color_map[ic] != oc:
+                    return []  # conflicting mapping
+            else:
+                color_map[ic] = oc
+
+    if not color_map:
+        return []
+
+    # Verify: the map must explain ALL changes in every demo
+    for inp, out in demos:
+        pred = inp.copy()
+        for r in range(pred.shape[0]):
+            for c in range(pred.shape[1]):
+                v = int(pred[r, c])
+                if v in color_map:
+                    pred[r, c] = color_map[v]
+        if not np.array_equal(pred, out):
+            return []
+
+    prog = SearchProgram(
+        steps=[SearchStep('recolor_map', {'color_map': color_map})],
+        provenance='derive:color_map',
+    )
+    return [prog]
+
 
 def _derive_uniform(all_transitions, all_facts, demos):
     """All non-identical objects undergo the same action."""

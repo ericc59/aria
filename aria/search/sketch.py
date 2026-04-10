@@ -212,6 +212,8 @@ class SearchProgram:
             elif step.action == 'cavity_transfer':
                 from aria.search.executor import _exec_cavity_transfer
                 result = _exec_cavity_transfer(result, step.params or {})
+            elif step.action == 'recolor_map':
+                result = _exec_recolor_map(result, step.params or {})
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()
@@ -494,7 +496,24 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     if action == 'cavity_transfer':
         return ASTNode(Op.CAVITY_TRANSFER, [ASTNode(Op.INPUT)], param=p)
 
+    if action == 'recolor_map':
+        return ASTNode(Op.RECOLOR, [ASTNode(Op.INPUT)], param=p)
+
     raise ValueError(f"Unknown search action for AST lowering: {action}")
+
+
+def _exec_recolor_map(grid, params):
+    """Apply a global color substitution map to every cell."""
+    color_map = params.get('color_map', {})
+    if not color_map:
+        return grid
+    result = grid.copy()
+    for r in range(result.shape[0]):
+        for c in range(result.shape[1]):
+            v = int(result[r, c])
+            if v in color_map:
+                result[r, c] = color_map[v]
+    return result
 
 
 def _exec_quadrant_template_decode(inp, step):
