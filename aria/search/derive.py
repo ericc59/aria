@@ -552,24 +552,19 @@ def _derive_conditional_dispatch(all_transitions, all_facts, demos):
     if len(changed_0) < 2:
         return []
 
-    # Collect all candidate selectors that partition the changed objects
     all_oids = set(t.in_obj.oid for t in changed_0 if t.in_obj)
     if len(all_oids) < 2:
         return []
 
-    # Try grouping by color (most common conditional)
-    color_groups = defaultdict(set)
-    for t in changed_0:
-        if t.in_obj:
-            color_groups[t.in_obj.color].add(t.in_obj.oid)
+    # Derive bg from demo output (handles dense grids where perceive can't detect bg)
+    bg = _infer_bg_from_demos(demos)
 
     for partition in _candidate_partitions(changed_0, all_facts[0]):
         steps = []
         ok = True
         for sel, group_oids in partition:
-            # Find what action this group does uniformly in demo 0
             group_trans = [t for t in changed_0 if t.in_obj and t.in_obj.oid in group_oids]
-            step = _derive_group_step(group_trans, sel, all_transitions, all_facts, demos)
+            step = _derive_group_step(group_trans, sel, all_transitions, all_facts, demos, bg)
             if step is None:
                 ok = False
                 break
@@ -581,9 +576,30 @@ def _derive_conditional_dispatch(all_transitions, all_facts, demos):
         prog = SearchProgram(steps=steps, provenance='derive:conditional_dispatch')
         if prog.verify(demos):
             results.append(prog)
-            return results  # first valid is enough
+            return results
 
     return results
+
+
+def _infer_bg_from_demos(demos):
+    """Infer background color from demo input/output comparison.
+
+    Looks at cells that changed from non-zero to a uniform color → that's bg.
+    Falls back to perceive if no removal detected.
+    """
+    from collections import Counter
+    from aria.guided.perceive import perceive
+
+    for inp, out in demos:
+        removed_mask = (inp != out) & (inp != 0)
+        if not np.any(removed_mask):
+            continue
+        out_colors = Counter(int(out[r, c]) for r, c in zip(*np.where(removed_mask)))
+        if len(out_colors) == 1:
+            return next(iter(out_colors))
+
+    # Fallback: perceive bg from first output (output usually has clear bg)
+    return int(perceive(demos[0][1]).bg)
 
 
 def _candidate_partitions(changed_transitions, facts):
@@ -636,10 +652,14 @@ def _candidate_partitions(changed_transitions, facts):
             yield [(pos_sel, pos_in_changed), (neg_sel, neg_in_changed)]
 
 
-def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos):
+def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos, bg=None):
     """Derive a single SearchStep for a group of objects that share a selector.
 
-    Checks that the same action holds across all demos for objects matching sel.
+    Handles:
+    - removed: pass bg so executor uses correct background
+    - recolored: constant target color
+    - moved: fixed offset OR gravity/slide for variable offsets
+    - transformed: uniform geometric transform
     """
     if not group_trans:
         return None
@@ -650,7 +670,8 @@ def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos):
     mtype = next(iter(mtypes))
 
     if mtype == 'removed':
-        return SearchStep('remove', {}, sel)
+        params = {'bg': bg} if bg is not None else {}
+        return SearchStep('remove', params, sel)
 
     if mtype == 'recolored':
         colors = set(t.color_to for t in group_trans)
@@ -663,11 +684,32 @@ def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos):
         if len(offsets) == 1:
             dr, dc = next(iter(offsets))
             return SearchStep('move', {'dr': dr, 'dc': dc}, sel)
-        # Try gravity
+        # Try gravity (variable distances, consistent direction)
         rows, cols = demos[0][0].shape
         gdir = _detect_gravity(group_trans, rows, cols)
         if gdir:
             return SearchStep('gravity', {'direction': gdir}, sel)
+        # Try slide (move until collision)
+        sdir = _detect_slide_direction(group_trans)
+        if sdir:
+            return SearchStep('slide', {'direction': sdir}, sel)
+        return None
+
+    if mtype == 'moved_recolored':
+        # Split: try move + recolor if uniform recolor
+        colors = set(t.color_to for t in group_trans)
+        offsets = set((t.dr, t.dc) for t in group_trans)
+        if len(colors) == 1 and len(offsets) == 1:
+            # Both uniform — return move (recolor will be a separate step... but we
+            # can only return one step here. Return the move; recolor needs composition.)
+            dr, dc = next(iter(offsets))
+            return SearchStep('move', {'dr': dr, 'dc': dc}, sel)
+        if len(colors) == 1:
+            # Uniform recolor, variable move → try gravity
+            rows, cols = demos[0][0].shape
+            gdir = _detect_gravity(group_trans, rows, cols)
+            if gdir:
+                return SearchStep('gravity', {'direction': gdir}, sel)
         return None
 
     if mtype == 'transformed':
@@ -676,6 +718,22 @@ def _derive_group_step(group_trans, sel, all_transitions, all_facts, demos):
             return SearchStep('transform', {'xform': next(iter(xforms))}, sel)
         return None
 
+    return None
+
+
+def _detect_slide_direction(transitions):
+    """Detect if all transitions slide in the same direction (variable distance)."""
+    if not transitions:
+        return None
+    drs = set(1 if t.dr > 0 else (-1 if t.dr < 0 else 0) for t in transitions)
+    dcs = set(1 if t.dc > 0 else (-1 if t.dc < 0 else 0) for t in transitions)
+
+    if len(drs) == 1 and len(dcs) == 1:
+        dr, dc = next(iter(drs)), next(iter(dcs))
+        if dr != 0 and dc == 0:
+            return 'down' if dr > 0 else 'up'
+        if dc != 0 and dr == 0:
+            return 'right' if dc > 0 else 'left'
     return None
 
 

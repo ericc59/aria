@@ -416,7 +416,9 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
                        param=(sel_preds, p.get('color', 0)))
 
     if action == 'remove':
-        return ASTNode(Op.REMOVE, [ASTNode(Op.INPUT)], param=sel_preds)
+        bg_override = p.get('bg')
+        return ASTNode(Op.REMOVE, [ASTNode(Op.INPUT)],
+                       param=(sel_preds, bg_override))
 
     if action == 'move':
         return ASTNode(Op.MOVE, [ASTNode(Op.INPUT)],

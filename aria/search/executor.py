@@ -465,13 +465,22 @@ def _exec_remove(node, inp, ctx):
     grid = _child(node, 0, inp, ctx)
     if grid is None:
         return None
+    # param is either: sel_preds (old format) or (sel_preds, bg_override)
+    param = node.param
+    if isinstance(param, tuple) and len(param) == 2 and (param[1] is None or isinstance(param[1], int)):
+        sel_preds, bg_override = param
+    else:
+        sel_preds = param
+        bg_override = None
+
     facts = perceive(grid)
+    bg = bg_override if bg_override is not None else facts.bg
     result = grid.copy()
-    for obj in prim_select(facts, node.param):
+    for obj in prim_select(facts, sel_preds):
         for r in range(obj.height):
             for c in range(obj.width):
                 if obj.mask[r, c]:
-                    result[obj.row + r, obj.col + c] = facts.bg
+                    result[obj.row + r, obj.col + c] = bg
     return result
 
 
