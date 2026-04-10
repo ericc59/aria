@@ -5,6 +5,7 @@
 - retained `DIAGONAL_COLLISION_TRACE`, `MASKED_PATCH_TRANSFER`, `SEPARATOR_MOTIF_BROADCAST`, `LINE_ARITH_BROADCAST`, and `BARRIER_PORT_TRANSFER` as the current defensible additions from this wave
 - started G07 substrate with exact rectangular frame-item extraction and frame-family grouping/column compaction helpers for frame-pack tasks like `b5ca7ac4` and `2ba387bc`
 - refactored `frame_bbox_pack` to use explicit rectangular item extraction (hollow frames + solid blocks) instead of the older object/frame heuristic
+- extended `frame_bbox_pack` with family-side lane packing for G07: same-color rectangular families now get overlap-aware column clustering and side placement without a new task op
 
 ## 2026-04-09
 

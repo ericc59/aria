@@ -757,13 +757,33 @@ def _exec_frame_bbox_pack(inp, step):
 
 def _do_frame_bbox_pack(inp, params):
     """Shared frame-bbox pack logic for both SearchProgram and AST execution."""
-    from aria.search.frames import extract_rect_items
+    from aria.search.frames import extract_rect_items, render_rect_family_side
 
     bg = int(np.bincount(inp.ravel()).argmax())
+    mode = params.get('mode')
     ordering = params.get('ordering', 'row')
     bh = params.get('block_h')
     bw = params.get('block_w')
     nc = params.get('grid_cols')  # number of columns in output grid
+
+    if mode == 'family_side_lanes':
+        items = extract_rect_items(inp, bg=bg, min_span=4)
+        if not items:
+            return inp
+        family_colors = sorted({item.color for item in items})
+        if len(family_colors) != 2:
+            return inp
+        if params.get('family_order', 'desc') == 'desc':
+            ordered_colors = sorted(family_colors, reverse=True)
+        else:
+            ordered_colors = sorted(family_colors)
+        result = np.full(inp.shape, bg, dtype=inp.dtype)
+        for side, color in zip(('left', 'right'), ordered_colors):
+            group = [item for item in items if item.color == color]
+            family_canvas = render_rect_family_side(group, shape=inp.shape, bg=bg, side=side)
+            mask = family_canvas != bg
+            result[mask] = family_canvas[mask]
+        return result
 
     if not bh or not bw or not nc:
         return inp

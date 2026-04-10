@@ -1226,13 +1226,14 @@ def _derive_frame_bbox_pack(demos):
     Detects framed objects, extracts their bboxes, tries to arrange them
     into a grid matching the output dimensions.
     """
-    from aria.search.frames import extract_rect_items
+    from aria.search.frames import extract_rect_items, render_rect_family_side
 
     results = []
 
     # Analyze demo 0
     inp0, out0 = demos[0]
     bg0 = int(np.bincount(inp0.ravel()).argmax())
+    frame_items0 = extract_rect_items(inp0, bg=bg0, min_span=4)
     frame_infos = [
         {
             'bbox': item.patch,
@@ -1242,7 +1243,7 @@ def _derive_frame_bbox_pack(demos):
             'interior_bg': item.interior_bg,
             'kind': item.kind,
         }
-        for item in extract_rect_items(inp0, bg=bg0, min_span=4)
+        for item in frame_items0
     ]
 
     if len(frame_infos) < 2:
@@ -1256,6 +1257,58 @@ def _derive_frame_bbox_pack(demos):
 
     oh, ow = out0.shape
     n_frames = len(frame_infos)
+
+    family_colors0 = sorted({item.color for item in frame_items0})
+    if inp0.shape == out0.shape and len(family_colors0) == 2:
+        family_orders = [
+            ("desc", sorted(family_colors0, reverse=True)),
+            ("asc", sorted(family_colors0)),
+        ]
+        for family_order_name, family_order in family_orders:
+            candidate = np.full_like(out0, int(np.bincount(out0.ravel()).argmax()))
+            ok = True
+            for side, color in zip(("left", "right"), family_order):
+                group = [item for item in frame_items0 if item.color == color]
+                if not group:
+                    ok = False
+                    break
+                family_canvas = render_rect_family_side(group, shape=out0.shape, bg=bg0, side=side)
+                mask = family_canvas != bg0
+                candidate[mask] = family_canvas[mask]
+            if ok and np.array_equal(candidate, out0):
+                verified = True
+                for inp, out in demos[1:]:
+                    bg_i = int(np.bincount(inp.ravel()).argmax())
+                    items_i = extract_rect_items(inp, bg=bg_i, min_span=4)
+                    colors_i = sorted({item.color for item in items_i})
+                    if sorted(colors_i) != sorted(family_order):
+                        verified = False
+                        break
+                    cand = np.full_like(out, int(np.bincount(out.ravel()).argmax()))
+                    for side, color in zip(("left", "right"), family_order):
+                        group = [item for item in items_i if item.color == color]
+                        if not group:
+                            verified = False
+                            break
+                        family_canvas = render_rect_family_side(group, shape=out.shape, bg=bg_i, side=side)
+                        mask = family_canvas != bg_i
+                        cand[mask] = family_canvas[mask]
+                    if not verified or not np.array_equal(cand, out):
+                        verified = False
+                        break
+                if verified:
+                    prog = SearchProgram(
+                        steps=[SearchStep(
+                            'frame_bbox_pack',
+                            {
+                                'mode': 'family_side_lanes',
+                                'family_order': family_order_name,
+                            },
+                        )],
+                        provenance=f'derive:frame_bbox_pack_family_side_lanes_{family_order_name}',
+                    )
+                    results.append(prog)
+                    return results
 
     # Compute grid dimensions directly from output shape and block size
     if oh % bh != 0 or ow % bw != 0:
