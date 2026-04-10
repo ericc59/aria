@@ -353,6 +353,43 @@ def get_fill_extents(content: np.ndarray, side: WindowSide) -> list[int]:
     return extents
 
 
+def _compute_fill_K(
+    content: np.ndarray,
+    side: WindowSide,
+    N_source: int,
+    is_transfer: bool,
+) -> int:
+    """Determine the fill step count K.
+
+    K=1 for in-place.  For transfer: K=2 if 7-cells span >=2 positions
+    along the stack axis, else K = fill_dim - N_source (fills to edge).
+    """
+    if not is_transfer:
+        return 1
+    rows, cols = content.shape
+    sdim, fdim, _ = _stack_and_fill_dims(side, rows, cols)
+
+    # Count distinct stack positions containing 7
+    if side in ("left", "right"):
+        n_active = sum(1 for r in range(rows) if 7 in content[r])
+    else:
+        n_active = sum(1 for c in range(cols) if 7 in content[:, c])
+
+    if n_active >= 2:
+        return 2
+    return max(1, fdim - N_source)
+
+
+def _edge_correction(extents: list[int], idx: int) -> int:
+    """Return 1 if *idx* is at the interior edge of a flat run before a drop."""
+    n = len(extents)
+    if idx <= 0 or idx >= n - 1:
+        return 0
+    if extents[idx] == extents[idx - 1] and extents[idx] > extents[idx + 1]:
+        return 1
+    return 0
+
+
 def progressive_fill(
     content: np.ndarray,
     side: WindowSide,
@@ -364,31 +401,35 @@ def progressive_fill(
     source_shape: tuple[int, int] | None = None,
     fill_color: int = 7,
     base_color: int = 5,
+    K: int | None = None,
 ) -> np.ndarray:
-    """Apply progressive staircase fill to a content grid.
+    """Apply progressive fill to a content grid.
 
-    Fills *fill_color* into *base_color* cells using a Manhattan staircase
-    from the bar-corner.  When source metadata is provided and the output
-    window has the same bar-side + content-shape as the source, a per-slot
-    excess correction is applied to preserve non-staircase source shapes.
+    Two modes depending on whether source metadata enables the ``source+K``
+    model or falls back to the Manhattan staircase:
+
+    1. **source+K** (same bar-side + content-shape): each slot's extent =
+       ``source_extent + K - edge_correction``, capped at fill_dim.
+    2. **staircase** (different shape / fresh workspace): pure Manhattan
+       staircase from the bar-corner with ``N_out`` steps.
     """
     rows, cols = content.shape
     sdim, fdim, corner_idx = _stack_and_fill_dims(side, rows, cols)
 
-    apply_excess = (
+    use_source_plus_k = (
         source_extents is not None
-        and N_source is not None
+        and K is not None
         and side == source_side
         and content.shape == source_shape
     )
 
     result = content.copy()
     for i in range(sdim):
-        base = _staircase_extent(N_out, i, corner_idx, fdim)
-        if apply_excess and i < len(source_extents):
-            src_stair = _staircase_extent(N_source, i, corner_idx, fdim)
-            excess = max(0, source_extents[i] - src_stair)
-            base = max(0, base - excess)
+        if use_source_plus_k and i < len(source_extents):
+            ext = source_extents[i] + K - _edge_correction(source_extents, i)
+            base = min(ext, fdim)
+        else:
+            base = _staircase_extent(N_out, i, corner_idx, fdim)
 
         if base <= 0:
             continue
@@ -652,6 +693,7 @@ def _solve_inplace(result, bg, bar_color, windows, source,
             source_extents=own_ext, N_source=own_N,
             source_side=w.side if own_ext else None,
             source_shape=content.shape if own_ext else None,
+            K=1,  # in-place always K=1
         )
 
         # Erase old window
@@ -784,6 +826,7 @@ def _solve_transfer(result, bg, bar_color, windows, sources, targets):
         best_src = min(sources, key=lambda s: abs(_window_center(s)[0] - pair_center[0]) + abs(_window_center(s)[1] - pair_center[1]))
         s_content, s_ext, N_src = _source_params(best_src)
 
+        K = _compute_fill_K(s_content, best_src.side, N_src, is_transfer=True)
         sdim = pr if out_side in ("left", "right") else pc
         N_out = N_src + sdim
 
@@ -792,6 +835,7 @@ def _solve_transfer(result, bg, bar_color, windows, sources, targets):
             out_side, N_out,
             source_extents=s_ext, N_source=N_src,
             source_side=best_src.side, source_shape=s_content.shape,
+            K=K,
         )
 
         # Erase paired window
@@ -808,7 +852,7 @@ def _solve_transfer(result, bg, bar_color, windows, sources, targets):
         axes_match = target_vertical == output_vertical
 
         if axes_match:
-            # Bar AT target position
+            # Bar at target position — target bar becomes the new window's bar
             if out_side == "left":
                 anchor_r, anchor_c = tr0, tc0
             elif out_side == "right":
