@@ -77,13 +77,7 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
-    # Remaining strategies require same-shape
-    if any(inp.shape != out.shape for inp, out in demos):
-        return []
-
-    progs = _derive_diagonal_collision_trace(demos)
-    if progs:
-        return progs
+    # Shape-independent strategies (work for any input/output size)
 
     # Strategy 0a: Global color map (simple substitution)
     progs = _derive_color_map(demos)
@@ -102,6 +96,14 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
 
     # Strategy 0d: Scale-up or tile (output = repeated/scaled input)
     progs = _derive_scale_or_tile(demos)
+    if progs:
+        return progs
+
+    # Remaining strategies require same-shape
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    progs = _derive_diagonal_collision_trace(demos)
     if progs:
         return progs
 
@@ -164,9 +166,12 @@ def _derive_scale_or_tile(demos):
     if oh % ih == 0 and ow % iw == 0:
         rr, rc = oh // ih, ow // iw
         if np.array_equal(np.tile(inp0, (rr, rc)), out0):
-            all_ok = all(np.array_equal(np.tile(inp, (out.shape[0]//inp.shape[0], out.shape[1]//inp.shape[1])), out)
-                         for inp, out in demos
-                         if out.shape[0] % inp.shape[0] == 0 and out.shape[1] % inp.shape[1] == 0)
+            # Enforce SAME tile params on all demos
+            all_ok = all(
+                out.shape == (inp.shape[0] * rr, inp.shape[1] * rc)
+                and np.array_equal(np.tile(inp, (rr, rc)), out)
+                for inp, out in demos[1:]
+            )
             if all_ok:
                 return [SearchProgram(
                     steps=[SearchStep('tile', {'rows': rr, 'cols': rc})],
@@ -179,12 +184,12 @@ def _derive_scale_or_tile(demos):
         if sr == sc:
             scaled = np.repeat(np.repeat(inp0, sr, axis=0), sc, axis=1)
             if np.array_equal(scaled, out0):
+                # Enforce SAME scale factor on all demos
                 all_ok = all(
-                    np.array_equal(
-                        np.repeat(np.repeat(inp, out.shape[0]//inp.shape[0], axis=0),
-                                  out.shape[1]//inp.shape[1], axis=1), out)
-                    for inp, out in demos
-                    if out.shape[0] % inp.shape[0] == 0 and out.shape[1] % inp.shape[1] == 0
+                    out.shape == (inp.shape[0] * sr, inp.shape[1] * sr)
+                    and np.array_equal(
+                        np.repeat(np.repeat(inp, sr, axis=0), sr, axis=1), out)
+                    for inp, out in demos[1:]
                 )
                 if all_ok:
                     return [SearchProgram(
@@ -900,22 +905,40 @@ def _derive_conditional_dispatch(all_transitions, all_facts, demos):
 
 
 def _partition_generalizes(partition, all_transitions, all_facts):
-    """Check that a partition's selectors produce consistent action groups in ALL demos."""
+    """Check that a partition's selectors produce DISJOINT, consistent groups in ALL demos.
+
+    For each demo beyond 0:
+    1. Each selector must resolve to a non-empty set of changed objects
+    2. All changed objects in a group must share the same match_type
+    3. Groups must be DISJOINT (no object selected by two selectors)
+    4. Groups must COVER all changed objects (nothing missed)
+    """
     for demo_idx in range(1, len(all_transitions)):
         facts = all_facts[demo_idx]
         trans = all_transitions[demo_idx]
         trans_by_oid = {t.in_obj.oid: t for t in trans if t.in_obj}
+        changed_oids = {oid for oid, t in trans_by_oid.items() if t.match_type != 'identical'}
 
-        for sel, expected_oids in partition:
+        all_selected = set()
+        for sel, _ in partition:
             selected = _resolve_selector(sel, facts)
-            if selected is None or not selected:
+            if selected is None:
                 return False
 
-            # All selected CHANGED objects must have the SAME match_type
-            group_mtypes = set()
-            for oid in selected:
-                if oid in trans_by_oid and trans_by_oid[oid].match_type != 'identical':
-                    group_mtypes.add(trans_by_oid[oid].match_type)
+            # Only consider changed objects in this group
+            group_changed = selected & changed_oids
+            if not group_changed:
+                # Selector finds objects but none are changed — acceptable
+                # (some groups may be empty in some demos)
+                continue
+
+            # Disjointness: no overlap with previously selected
+            if group_changed & all_selected:
+                return False
+            all_selected |= group_changed
+
+            # Uniformity: all changed objects in group share match_type
+            group_mtypes = {trans_by_oid[oid].match_type for oid in group_changed}
             if len(group_mtypes) > 1:
                 return False
 
