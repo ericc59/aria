@@ -90,6 +90,7 @@ class Op(Enum):
     BARRIER_PORT_TRANSFER = auto()     # Grid → Grid  param: {mode: 'auto'}
     CAVITY_TRANSFER = auto()           # Grid → Grid  param: {mode: 'auto'}
     RECOLOR_MAP = auto()               # Grid → Grid  param: {old_color: new_color}
+    TEMPLATE_BROADCAST = auto()      # Grid → Grid  param: {bg?: int}  mask-driven template placement
 
     # Object-level actions
     RECOLOR = auto()        # param: (selector_preds, new_color)

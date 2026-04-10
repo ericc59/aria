@@ -281,6 +281,12 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
             return None
         return _exec_recolor_map_ast(grid, node.param)
 
+    if op == Op.TEMPLATE_BROADCAST:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_template_broadcast(grid, node.param or {})
+
     if op == Op.QUADRANT_TEMPLATE_DECODE:
         grid = _child(node, 0, inp, ctx)
         if grid is None:
@@ -297,6 +303,123 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         return _exec_move(node, inp, ctx)
     if op == Op.GRAVITY:
         return _exec_gravity(node, inp, ctx)
+
+    if op == Op.SLIDE:
+        from aria.guided.dsl import prim_select
+        from aria.guided.perceive import perceive
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        sel_preds, direction = node.param
+        facts = perceive(grid)
+        targets = prim_select(facts, sel_preds)
+        result = grid.copy()
+        rows, cols = grid.shape
+        dr, dc = {'up': (-1,0), 'down': (1,0), 'left': (0,-1), 'right': (0,1)}.get(direction, (0,0))
+        for obj in sorted(targets, key=lambda o: (-o.row * dr - o.col * dc)):
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.mask[r, c]:
+                        result[obj.row + r, obj.col + c] = facts.bg
+            nr, nc = obj.row, obj.col
+            while True:
+                nnr, nnc = nr + dr, nc + dc
+                if not (0 <= nnr < rows - obj.height + 1 and 0 <= nnc < cols - obj.width + 1):
+                    break
+                collision = False
+                for r in range(obj.height):
+                    for c in range(obj.width):
+                        if obj.mask[r, c] and result[nnr + r, nnc + c] != facts.bg:
+                            collision = True
+                            break
+                    if collision:
+                        break
+                if collision:
+                    break
+                nr, nc = nnr, nnc
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.mask[r, c]:
+                        result[nr + r, nc + c] = obj.color
+        return result
+
+    if op == Op.STAMP:
+        from aria.guided.dsl import prim_select
+        from aria.guided.perceive import perceive
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        sel_preds, sdr, sdc = node.param
+        facts = perceive(grid)
+        targets = prim_select(facts, sel_preds)
+        result = grid.copy()
+        for obj in targets:
+            nr, nc = obj.row + sdr, obj.col + sdc
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.mask[r, c]:
+                        tr, tc = nr + r, nc + c
+                        if 0 <= tr < result.shape[0] and 0 <= tc < result.shape[1]:
+                            result[tr, tc] = obj.color
+        return result
+
+    if op == Op.TRANSFORM_OBJ:
+        from aria.guided.dsl import prim_select
+        from aria.guided.perceive import perceive
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        sel_preds, xform_name = node.param
+        facts = perceive(grid)
+        targets = prim_select(facts, sel_preds)
+        result = grid.copy()
+        for obj in targets:
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.mask[r, c]:
+                        result[obj.row + r, obj.col + c] = facts.bg
+            transformed = _apply_named_transform(
+                grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width], xform_name)
+            th, tw = transformed.shape
+            for r in range(th):
+                for c in range(tw):
+                    if transformed[r, c] != facts.bg:
+                        tr, tc = obj.row + r, obj.col + c
+                        if 0 <= tr < result.shape[0] and 0 <= tc < result.shape[1]:
+                            result[tr, tc] = transformed[r, c]
+        return result
+
+    if op == Op.FILL_INTERIOR:
+        from aria.guided.dsl import prim_select, prim_find_frame
+        from aria.guided.perceive import perceive
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        sel_preds, fill_color = node.param
+        facts = perceive(grid)
+        result = grid.copy()
+        for obj in prim_select(facts, sel_preds):
+            frame = prim_find_frame(obj, grid)
+            if frame and hasattr(frame, 'interior_mask'):
+                for r, c in zip(*np.where(frame.interior_mask)):
+                    result[frame.row + r, frame.col + c] = fill_color
+        return result
+
+    if op == Op.FILL_ENCLOSED:
+        from aria.guided.perceive import perceive
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_legend_frame_fill(grid, node.param or {})
+
+    if op == Op.PERIODIC_EXTEND:
+        from aria.guided.perceive import perceive
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        from aria.guided.synthesize import _apply_periodic_extend
+        result = _apply_periodic_extend(grid, node.param)
+        return result if result is not None else grid
 
     # --- Composition ---
     if op == Op.COMPOSE:
@@ -533,6 +656,25 @@ def _exec_recolor_map_ast(grid, color_map):
             if v in cmap:
                 result[r, c] = cmap[v]
     return result
+
+
+def _exec_template_broadcast(grid, params):
+    """Blockwise template placement driven by a binary support mask.
+
+    Semantics: out = kron(mask, template)
+    where mask = (grid != bg) and template = grid.
+
+    Each cell in the input maps to a block in the output:
+    - non-bg cell → full copy of the input template
+    - bg cell → bg-filled block of the same size
+    """
+    bg = params.get('bg')
+    if bg is None:
+        from aria.guided.perceive import perceive
+        bg = int(perceive(grid).bg)
+
+    mask = (grid != bg).astype(np.int8)
+    return np.kron(mask, grid)
 
 
 def _exec_remove(node, inp, ctx):

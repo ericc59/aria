@@ -418,6 +418,9 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.TILE, [ASTNode(Op.INPUT)],
                        param=(p.get('rows', 1), p.get('cols', 1), p.get('transforms', {})))
 
+    if action == 'template_broadcast':
+        return ASTNode(Op.TEMPLATE_BROADCAST, [ASTNode(Op.INPUT)], param=p)
+
     if action == 'periodic_extend':
         return ASTNode(Op.PERIODIC_EXTEND, [ASTNode(Op.INPUT)],
                        param=p.get('color_map'))

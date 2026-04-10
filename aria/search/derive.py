@@ -99,6 +99,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    # Strategy 0e: Template broadcast (output = kron(mask, template))
+    progs = _derive_template_broadcast(demos)
+    if progs:
+        return progs
+
     # Remaining strategies require same-shape
     if any(inp.shape != out.shape for inp, out in demos):
         return []
@@ -198,6 +203,52 @@ def _derive_scale_or_tile(demos):
                     )]
 
     return []
+
+
+def _derive_template_broadcast(demos):
+    """Derive template broadcast: out = kron(input != bg, input).
+
+    Verification:
+    1. Output must be multiplicative in input size: oh == ih * ih, ow == iw * iw
+    2. Partition output into ih×iw blocks
+    3. Each block must be either the full input template or a bg-filled block
+    4. Non-bg block positions must match the input's non-bg support mask
+    """
+    if not demos:
+        return []
+
+    for inp, out in demos:
+        ih, iw = inp.shape
+        oh, ow = out.shape
+        # Output size must be ih*ih × iw*iw (template used as both mask and content)
+        if oh != ih * ih or ow != iw * iw:
+            return []
+
+    # Verify block structure for every demo
+    from aria.guided.perceive import perceive
+
+    for inp, out in demos:
+        ih, iw = inp.shape
+        bg = int(perceive(inp).bg)
+
+        bg_block = np.full((ih, iw), bg, dtype=inp.dtype)
+
+        for br in range(ih):
+            for bc in range(iw):
+                block = out[br * ih:(br + 1) * ih, bc * iw:(bc + 1) * iw]
+                is_bg_cell = (inp[br, bc] == bg)
+
+                if is_bg_cell:
+                    if not np.array_equal(block, bg_block):
+                        return []
+                else:
+                    if not np.array_equal(block, inp):
+                        return []
+
+    return [SearchProgram(
+        steps=[SearchStep('template_broadcast', {})],
+        provenance='derive:template_broadcast',
+    )]
 
 
 def _derive_direct_crop(demos):
