@@ -52,3 +52,17 @@ def test_search_programs_uses_signature_compatible_prior() -> None:
     prog = search_programs([(inp, out)], time_budget=1.0)
     assert prog is not None
     assert "tile" in prog.description
+
+
+def test_proposal_prior_round_trip(tmp_path: Path) -> None:
+    prior = SearchProposalPrior(
+        global_counts={"tile": 3, "recolor_map": 1},
+        by_signature={
+            "dims:different": {"tile": 3},
+            "dims:same": {"recolor_map": 1},
+        },
+    )
+    path = tmp_path / "prior.json"
+    prior.save_json(path)
+    loaded = SearchProposalPrior.load_json(path)
+    assert loaded == prior

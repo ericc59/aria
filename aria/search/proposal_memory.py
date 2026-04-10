@@ -36,6 +36,10 @@ def _iter_eval_reports(root: Path) -> list[Path]:
     return sorted(root.glob("eval_*.json"))
 
 
+def default_prior_path() -> Path:
+    return _results_dir() / "search_proposal_prior.json"
+
+
 def _family_from_description(description: str) -> str | None:
     if not description.startswith("search:"):
         return None
@@ -62,6 +66,31 @@ class SearchProposalPrior:
     @classmethod
     def empty(cls) -> "SearchProposalPrior":
         return cls(global_counts={}, by_signature={})
+
+    def to_dict(self) -> dict:
+        return {
+            "version": 1,
+            "global_counts": dict(self.global_counts),
+            "by_signature": {
+                sig: dict(counts)
+                for sig, counts in self.by_signature.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "SearchProposalPrior":
+        if int(data.get("version", 0)) != 1:
+            raise ValueError("Unsupported search proposal prior format")
+        return cls(
+            global_counts={
+                str(k): int(v)
+                for k, v in data.get("global_counts", {}).items()
+            },
+            by_signature={
+                str(sig): {str(k): int(v) for k, v in counts.items()}
+                for sig, counts in data.get("by_signature", {}).items()
+            },
+        )
 
     @classmethod
     def from_eval_reports(cls, paths: list[Path]) -> "SearchProposalPrior":
@@ -92,6 +121,21 @@ class SearchProposalPrior:
             global_counts=dict(global_counts),
             by_signature={sig: dict(counts) for sig, counts in by_signature.items()},
         )
+
+    def save_json(self, path: str | Path) -> None:
+        output = Path(path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with open(output, "w") as f:
+            json.dump(self.to_dict(), f, indent=2, sort_keys=True)
+
+    @classmethod
+    def load_json(cls, path: str | Path) -> "SearchProposalPrior":
+        source = Path(path)
+        if not source.exists():
+            return cls.empty()
+        with open(source) as f:
+            data = json.load(f)
+        return cls.from_dict(data)
 
     def score_family(self, family: str, task_signatures: frozenset[str]) -> float:
         if not family:
@@ -140,8 +184,22 @@ def load_default_search_prior() -> SearchProposalPrior:
     if no reports exist, the prior is simply empty.
     """
 
+    persisted = default_prior_path()
+    if persisted.exists():
+        return SearchProposalPrior.load_json(persisted)
+
     root = _results_dir()
     paths = _iter_eval_reports(root)
     if not paths:
         return SearchProposalPrior.empty()
     return SearchProposalPrior.from_eval_reports(paths)
+
+
+def build_default_search_prior() -> SearchProposalPrior:
+    """Rebuild the persisted proposal prior from local eval reports."""
+
+    root = _results_dir()
+    prior = SearchProposalPrior.from_eval_reports(_iter_eval_reports(root))
+    prior.save_json(default_prior_path())
+    load_default_search_prior.cache_clear()
+    return prior

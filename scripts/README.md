@@ -4,6 +4,7 @@ Current primary entrypoints:
 
 - `solve.py`: canonical single-task solver for the current `aria/search` stack
 - `eval_arc2.py`: canonical ARC eval runner for the current `aria/search` stack
+- `build_search_prior.py`: rebuild the persisted proposal-memory prior from solved eval reports
 - `make_submission.py`: build `submission.json` from eval reports
 - `diagnose.py`: summarize eval report failures and gaps
 - `test_program.py`: execute a candidate program on a task
