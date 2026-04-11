@@ -1177,6 +1177,71 @@ def _derive_rank_recolor(all_transitions, all_facts, demos):
 
 
 # ---------------------------------------------------------------------------
+# Frame opening detection (shared by derive + execution)
+# ---------------------------------------------------------------------------
+
+def _find_frame_openings(grid, frames, bg):
+    """Find interior openings in frame objects.
+
+    Excludes exterior bg cells by flood-filling from the bbox border.
+    Only keeps bg regions fully enclosed by the frame.
+
+    Returns list of (frame_obj, global_r0, global_c0, h, w, n_cells, mask).
+    """
+    from collections import deque
+    from scipy import ndimage
+
+    openings = []
+    for f in frames:
+        patch = grid[f.row:f.row + f.height, f.col:f.col + f.width]
+        bg_mask = (patch == bg)
+        if not np.any(bg_mask):
+            continue
+
+        # Flood-fill exterior bg from bbox borders
+        h, w = patch.shape
+        exterior = np.zeros((h, w), dtype=bool)
+        q = deque()
+        for r in range(h):
+            for c in (0, w - 1):
+                if bg_mask[r, c] and not exterior[r, c]:
+                    exterior[r, c] = True
+                    q.append((r, c))
+        for c in range(w):
+            for r in (0, h - 1):
+                if bg_mask[r, c] and not exterior[r, c]:
+                    exterior[r, c] = True
+                    q.append((r, c))
+        while q:
+            r, c = q.popleft()
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and bg_mask[nr, nc] and not exterior[nr, nc]:
+                    exterior[nr, nc] = True
+                    q.append((nr, nc))
+
+        # Interior = bg minus exterior
+        interior = bg_mask & ~exterior
+        if not np.any(interior):
+            continue
+
+        labels, n = ndimage.label(interior)
+        for li in range(1, n + 1):
+            cells = list(zip(*np.where(labels == li)))
+            r0 = min(r for r, c in cells)
+            c0 = min(c for r, c in cells)
+            r1 = max(r for r, c in cells)
+            c1 = max(c for r, c in cells)
+            oh, ow = r1 - r0 + 1, c1 - c0 + 1
+            omask = np.zeros((oh, ow), dtype=bool)
+            for r, c in cells:
+                omask[r - r0, c - c0] = True
+            openings.append((f, r0 + f.row, c0 + f.col, oh, ow, len(cells), omask))
+
+    return openings
+
+
+# ---------------------------------------------------------------------------
 # Strategy 2f: Registration transfer (modules into frame openings)
 # ---------------------------------------------------------------------------
 
@@ -1213,31 +1278,14 @@ def _derive_registration_transfer(all_transitions, all_facts, demos):
         if not frames:
             return []
 
-        # Find openings in each frame (rectangular or non-rectangular)
-        frame_openings = []  # (frame, global_r0, global_c0, h, w, n_cells, mask)
-        for f in frames:
-            patch = inp[f.row:f.row + f.height, f.col:f.col + f.width]
-            opening_mask = (patch == bg)
-            if not np.any(opening_mask):
-                continue
-            labels, n_openings = ndimage.label(opening_mask)
-            for li in range(1, n_openings + 1):
-                cells = list(zip(*np.where(labels == li)))
-                r0 = min(r for r, c in cells)
-                c0 = min(c for r, c in cells)
-                r1 = max(r for r, c in cells)
-                c1 = max(c for r, c in cells)
-                oh, ow = r1 - r0 + 1, c1 - c0 + 1
-                omask = np.zeros((oh, ow), dtype=bool)
-                for r, c in cells:
-                    omask[r - r0, c - c0] = True
-                frame_openings.append((f, r0 + f.row, c0 + f.col,
-                                       oh, ow, len(cells), omask))
+        # Find interior openings in each frame (exclude exterior bg)
+        frame_openings = _find_frame_openings(inp, frames, bg)
 
         if not frame_openings:
             return []
 
-        # Match each moved module to a frame opening by shape/mask
+        # Match each moved module to nearest compatible frame opening
+        # (same matching rule as execution: nearest by center distance)
         demo_moves = []
         used_openings = set()
         for t in moved:
@@ -1247,19 +1295,16 @@ def _derive_registration_transfer(all_transitions, all_facts, demos):
             for oi, (frame, or0, oc0, oh, ow, nc, omask) in enumerate(frame_openings):
                 if oi in used_openings:
                     continue
-                # Check bbox dimensions + cell count + mask shape
                 if m.height == oh and m.width == ow and m.size == nc:
                     if np.array_equal(m.mask, omask):
-                        if t.out_obj.row == or0 and t.out_obj.col == oc0:
-                            dist = 0
-                        else:
-                            dist = abs(t.out_obj.row - or0) + abs(t.out_obj.col - oc0)
+                        dist = abs(m.center_row - (or0 + oh / 2)) + \
+                               abs(m.center_col - (oc0 + ow / 2))
                         if dist < best_dist:
                             best_dist = dist
                             best_opening = oi
 
             if best_opening is None:
-                return []  # unmatched module
+                return []
 
             used_openings.add(best_opening)
             frame, or0, oc0, oh, ow, nc, omask = frame_openings[best_opening]

@@ -399,42 +399,21 @@ def _exec_slide(inp, step):
 def _exec_registration_transfer(inp, step):
     """Move modules into frame openings based on shape fit.
 
-    At execution time: perceives the grid, finds frames with openings,
-    matches small objects to openings by shape, and moves them in.
+    Uses the same _find_frame_openings helper as the derive path
+    (interior-only openings, nearest-compatible matching).
     """
     from aria.guided.perceive import perceive
-    from scipy import ndimage
+    from aria.search.derive import _find_frame_openings
 
     facts = perceive(inp)
     bg = facts.bg
     result = inp.copy()
 
-    # Find frames and their openings
     frames = [o for o in facts.objects if not o.is_rectangular and o.size >= 8]
     if not frames:
         return inp
 
-    frame_openings = []  # (frame, global_r0, global_c0, height, width, n_cells, mask)
-    for f in frames:
-        patch = inp[f.row:f.row + f.height, f.col:f.col + f.width]
-        opening_mask = (patch == bg)
-        if not np.any(opening_mask):
-            continue
-        labels, n = ndimage.label(opening_mask)
-        for li in range(1, n + 1):
-            cells = list(zip(*np.where(labels == li)))
-            r0 = min(r for r, c in cells)
-            c0 = min(c for r, c in cells)
-            r1 = max(r for r, c in cells)
-            c1 = max(c for r, c in cells)
-            oh, ow = r1 - r0 + 1, c1 - c0 + 1
-            # Build opening mask (may be non-rectangular)
-            omask = np.zeros((oh, ow), dtype=bool)
-            for r, c in cells:
-                omask[r - r0, c - c0] = True
-            frame_openings.append((f, r0 + f.row, c0 + f.col, oh, ow,
-                                   len(cells), omask))
-
+    frame_openings = _find_frame_openings(inp, frames, bg)
     if not frame_openings:
         return inp
 
