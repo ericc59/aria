@@ -236,6 +236,8 @@ class SearchProgram:
                 result = _exec_panel_boolean(result, step)
             elif step.action == 'marker_stamp':
                 result = _exec_marker_stamp(result, step)
+            elif step.action == 'registration_transfer':
+                result = _exec_registration_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
                 result = _exec_quadrant_template_decode(result, step)
             elif step.action == 'frame_bbox_pack':
@@ -390,6 +392,89 @@ def _exec_slide(inp, step):
                     nc = obj.col + c + shift * dc
                     if 0 <= nr < rows and 0 <= nc < cols:
                         result[nr, nc] = obj.color
+
+    return result
+
+
+def _exec_registration_transfer(inp, step):
+    """Move modules into frame openings based on shape fit.
+
+    At execution time: perceives the grid, finds frames with openings,
+    matches small objects to openings by shape, and moves them in.
+    """
+    from aria.guided.perceive import perceive
+    from scipy import ndimage
+
+    facts = perceive(inp)
+    bg = facts.bg
+    result = inp.copy()
+
+    # Find frames and their openings
+    frames = [o for o in facts.objects if not o.is_rectangular and o.size >= 8]
+    if not frames:
+        return inp
+
+    frame_openings = []  # (frame, global_r0, global_c0, height, width, n_cells, mask)
+    for f in frames:
+        patch = inp[f.row:f.row + f.height, f.col:f.col + f.width]
+        opening_mask = (patch == bg)
+        if not np.any(opening_mask):
+            continue
+        labels, n = ndimage.label(opening_mask)
+        for li in range(1, n + 1):
+            cells = list(zip(*np.where(labels == li)))
+            r0 = min(r for r, c in cells)
+            c0 = min(c for r, c in cells)
+            r1 = max(r for r, c in cells)
+            c1 = max(c for r, c in cells)
+            oh, ow = r1 - r0 + 1, c1 - c0 + 1
+            # Build opening mask (may be non-rectangular)
+            omask = np.zeros((oh, ow), dtype=bool)
+            for r, c in cells:
+                omask[r - r0, c - c0] = True
+            frame_openings.append((f, r0 + f.row, c0 + f.col, oh, ow,
+                                   len(cells), omask))
+
+    if not frame_openings:
+        return inp
+
+    # Find candidate modules: small objects not part of any frame
+    frame_oids = {f.oid for f in frames}
+    max_opening_cells = max(nc for _, _, _, _, _, nc, _ in frame_openings)
+    modules = [o for o in facts.objects if o.oid not in frame_oids and o.size <= max_opening_cells]
+
+    # Match each module to closest shape-compatible opening
+    used_openings = set()
+    for m in sorted(modules, key=lambda o: -o.size):  # largest modules first
+        best_oi = None
+        best_dist = float('inf')
+        for oi, (frame, or0, oc0, oh, ow, nc, omask) in enumerate(frame_openings):
+            if oi in used_openings:
+                continue
+            # Check: module fits the opening (same bbox AND same cell count)
+            if m.height == oh and m.width == ow and m.size == nc:
+                # Also check mask compatibility (module fills exactly the opening cells)
+                if np.array_equal(m.mask, omask):
+                    dist = abs(m.center_row - (or0 + oh / 2)) + abs(m.center_col - (oc0 + ow / 2))
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_oi = oi
+
+        if best_oi is not None:
+            used_openings.add(best_oi)
+            _, or0, oc0, oh, ow, _, _ = frame_openings[best_oi]
+            # Erase module from old position
+            for r in range(m.height):
+                for c in range(m.width):
+                    if m.mask[r, c]:
+                        result[m.row + r, m.col + c] = bg
+            # Place at opening
+            for r in range(m.height):
+                for c in range(m.width):
+                    if m.mask[r, c]:
+                        nr, nc = or0 + r, oc0 + c
+                        if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                            result[nr, nc] = m.color
 
     return result
 
@@ -560,7 +645,8 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     if action == 'recolor_map':
         return ASTNode(Op.RECOLOR_MAP, [ASTNode(Op.INPUT)], param=p.get('color_map', {}))
 
-    if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil'):
+    if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil',
+                  'registration_transfer'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 

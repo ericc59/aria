@@ -149,6 +149,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_action_first_dispatch(all_transitions, all_facts, demos)
         results.extend(progs)
 
+    # Strategy 2f: Registration transfer (modules move into frame openings)
+    if not results:
+        progs = _derive_registration_transfer(all_transitions, all_facts, demos)
+        results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -1172,6 +1177,116 @@ def _derive_rank_recolor(all_transitions, all_facts, demos):
 
 
 # ---------------------------------------------------------------------------
+# Strategy 2f: Registration transfer (modules into frame openings)
+# ---------------------------------------------------------------------------
+
+def _derive_registration_transfer(all_transitions, all_facts, demos):
+    """Modules move into frame openings based on shape fit.
+
+    Detects: large non-rectangular objects (frames) with bg-cell openings,
+    plus small objects (modules) that move to fill those openings.
+    Matches each module to the frame opening with the closest shape fit.
+    Emits per-module move steps.
+    """
+    from scipy import ndimage
+
+    # All demos must have moved objects
+    for trans in all_transitions:
+        moved = [t for t in trans if t.match_type in ('moved', 'moved_recolored') and t.in_obj]
+        if not moved:
+            return []
+
+    # Verify pattern in each demo: frames with openings + modules that fill them
+    all_move_steps = []  # per-demo list of (module_oid, dr, dc)
+
+    for di, (inp, out) in enumerate(demos):
+        facts = all_facts[di]
+        trans = all_transitions[di]
+        bg = facts.bg
+
+        moved = [t for t in trans if t.match_type in ('moved', 'moved_recolored') and t.in_obj]
+        if not moved:
+            return []
+
+        # Find frames: large non-rectangular objects
+        frames = [o for o in facts.objects if not o.is_rectangular and o.size >= 8]
+        if not frames:
+            return []
+
+        # Find openings in each frame (rectangular or non-rectangular)
+        frame_openings = []  # (frame, global_r0, global_c0, h, w, n_cells, mask)
+        for f in frames:
+            patch = inp[f.row:f.row + f.height, f.col:f.col + f.width]
+            opening_mask = (patch == bg)
+            if not np.any(opening_mask):
+                continue
+            labels, n_openings = ndimage.label(opening_mask)
+            for li in range(1, n_openings + 1):
+                cells = list(zip(*np.where(labels == li)))
+                r0 = min(r for r, c in cells)
+                c0 = min(c for r, c in cells)
+                r1 = max(r for r, c in cells)
+                c1 = max(c for r, c in cells)
+                oh, ow = r1 - r0 + 1, c1 - c0 + 1
+                omask = np.zeros((oh, ow), dtype=bool)
+                for r, c in cells:
+                    omask[r - r0, c - c0] = True
+                frame_openings.append((f, r0 + f.row, c0 + f.col,
+                                       oh, ow, len(cells), omask))
+
+        if not frame_openings:
+            return []
+
+        # Match each moved module to a frame opening by shape/mask
+        demo_moves = []
+        used_openings = set()
+        for t in moved:
+            m = t.in_obj
+            best_opening = None
+            best_dist = float('inf')
+            for oi, (frame, or0, oc0, oh, ow, nc, omask) in enumerate(frame_openings):
+                if oi in used_openings:
+                    continue
+                # Check bbox dimensions + cell count + mask shape
+                if m.height == oh and m.width == ow and m.size == nc:
+                    if np.array_equal(m.mask, omask):
+                        if t.out_obj.row == or0 and t.out_obj.col == oc0:
+                            dist = 0
+                        else:
+                            dist = abs(t.out_obj.row - or0) + abs(t.out_obj.col - oc0)
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_opening = oi
+
+            if best_opening is None:
+                return []  # unmatched module
+
+            used_openings.add(best_opening)
+            frame, or0, oc0, oh, ow, nc, omask = frame_openings[best_opening]
+            dr = or0 - m.row
+            dc = oc0 - m.col
+            demo_moves.append((m.oid, dr, dc))
+
+        all_move_steps.append(demo_moves)
+
+    # Check cross-demo consistency: same number of moves
+    n_moves = len(all_move_steps[0])
+    if any(len(dm) != n_moves for dm in all_move_steps):
+        return []
+
+    # Build per-module move steps
+    # We can't use fixed offsets because they vary per demo.
+    # Instead, emit a single 'registration_transfer' step that re-derives
+    # at execution time.
+    prog = SearchProgram(
+        steps=[SearchStep('registration_transfer', {})],
+        provenance='derive:registration_transfer',
+    )
+    if prog.verify(demos):
+        return [prog]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Shared: cross-demo selector from OID sets
 # ---------------------------------------------------------------------------

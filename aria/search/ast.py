@@ -203,6 +203,10 @@ class ASTProgram:
         self.search_program = search_program  # SearchProgram, for trace capture
 
     def execute(self, inp: Grid) -> Grid:
+        # Prefer SearchProgram execution when available (handles ops
+        # that don't lower to AST, like registration_transfer)
+        if self.search_program is not None:
+            return self.search_program.execute(inp)
         from aria.search.executor import execute_ast
         result = execute_ast(self.ast, inp)
         return result if result is not None else inp
