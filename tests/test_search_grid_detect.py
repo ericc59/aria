@@ -33,11 +33,11 @@ def test_detect_separator_grid_3x3():
 
 def test_cell_content_detection():
     """cell_has_content and cell_content_color should work."""
-    grid = np.zeros((7, 7), dtype=np.int8)
+    grid = np.zeros((8, 8), dtype=np.int8)
     grid[2, :] = 5
-    grid[4, :] = 5
+    grid[5, :] = 5
     grid[:, 2] = 5
-    grid[:, 4] = 5
+    grid[:, 5] = 5
     grid[0, 0] = 3  # content in cell (0,0)
 
     facts = perceive(grid)
@@ -58,14 +58,14 @@ def test_grid_fill_between_execution():
     from aria.search.sketch import SearchProgram, SearchStep
 
     # 3x3 grid with separators
-    grid = np.zeros((7, 7), dtype=np.int8)
+    grid = np.zeros((8, 8), dtype=np.int8)
     grid[2, :] = 5
-    grid[4, :] = 5
+    grid[5, :] = 5
     grid[:, 2] = 5
-    grid[:, 4] = 5
+    grid[:, 5] = 5
     # Color 3 in cell (0,0) and (0,2) — should fill (0,1)
     grid[0:2, 0:2] = 3
-    grid[0:2, 5:7] = 3
+    grid[0:2, 6:8] = 3
 
     prog = SearchProgram(
         steps=[SearchStep('grid_fill_between', {})],
@@ -75,9 +75,44 @@ def test_grid_fill_between_execution():
 
     # Cell (0,1) should now be filled with 3
     assert result[0, 3] == 3
-    assert result[1, 3] == 3
+    assert result[1, 4] == 3
     # Cell (1,0) should still be empty
     assert result[3, 0] == 0
+
+
+def test_grid_fill_between_pattern():
+    """grid_fill_between should fill between identical cell patterns."""
+    from aria.search.sketch import SearchProgram, SearchStep
+
+    grid = np.zeros((8, 8), dtype=np.int8)
+    grid[2, :] = 5
+    grid[5, :] = 5
+    grid[:, 2] = 5
+    grid[:, 5] = 5
+    # Two identical 2x2 patterns in cells (0,0) and (0,2)
+    grid[0, 0] = 3
+    grid[1, 1] = 4
+    grid[0, 6] = 3
+    grid[1, 7] = 4
+
+    prog = SearchProgram(
+        steps=[SearchStep('grid_fill_between', {'mode': 'pattern'})],
+        provenance='test',
+    )
+    result = prog.execute(grid)
+
+    # Cell (0,1) should now contain the same pattern as cell (0,0)
+    facts = perceive(result)
+    g = detect_separator_grid(facts)
+    assert g is not None
+    cell_src = g.cell_at(0, 0)
+    cell_dst = g.cell_at(0, 1)
+    assert cell_src is not None and cell_dst is not None
+    src = result[cell_src.r0:cell_src.r0 + cell_src.height,
+                 cell_src.c0:cell_src.c0 + cell_src.width]
+    dst = result[cell_dst.r0:cell_dst.r0 + cell_dst.height,
+                 cell_dst.c0:cell_dst.c0 + cell_dst.width]
+    assert np.array_equal(dst, src)
 
 
 def test_06df4c85_solves():

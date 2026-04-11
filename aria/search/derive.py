@@ -1492,10 +1492,11 @@ def _derive_anchor_registration_transfer(all_facts, demos):
 # ---------------------------------------------------------------------------
 
 def _derive_grid_broadcast(all_facts, demos):
-    """Fill empty cells between same-color blocks in grid rows and columns.
+    """Fill empty cells between repeated grid-cell content along rows/cols.
 
     Detects: a separator-defined grid. For each row/col, if two cells
-    share the same non-bg content color, all empty cells between them
+    share the same non-bg content color (mode='color') or identical
+    content pattern (mode='pattern'), all empty cells between them
     are filled with that content in the output.
     """
     from aria.search.grid_detect import (
@@ -1510,72 +1511,77 @@ def _derive_grid_broadcast(all_facts, demos):
         if grid_info is None:
             return []
 
-    # Build the expected output using the fill-between rule
-    all_ok = True
-    for di, (inp, out) in enumerate(demos):
-        facts = all_facts[di]
-        grid_info = detect_separator_grid(facts)
-        if grid_info is None:
-            all_ok = False
-            break
+    def _build_result(inp, facts, grid_info, mode):
         bg = facts.bg
-
         result = inp.copy()
 
-        # Fill between same-color blocks along BOTH rows and columns
         for axis in ('row', 'col'):
             n_lines = grid_info.n_rows if axis == 'row' else grid_info.n_cols
             n_cross = grid_info.n_cols if axis == 'row' else grid_info.n_rows
 
             for line in range(n_lines):
-                # Collect content colors at each grid position
-                colors_at = {}  # cross_idx → color
-                content_at = {}  # cross_idx → content array
+                keys_at = {}
+                content_at = {}
                 for cross in range(n_cross):
                     gr = line if axis == 'row' else cross
                     gc = cross if axis == 'row' else line
                     cell = grid_info.cell_at(gr, gc)
                     if cell and cell_has_content(inp, cell, bg):
-                        c = cell_content_color(inp, cell, bg)
-                        if c is not None:
-                            colors_at[cross] = c
-                            content_at[cross] = cell_content(inp, cell, bg)
+                        content = cell_content(inp, cell, bg)
+                        if mode == 'pattern':
+                            key = (content.shape, content.tobytes())
+                        else:
+                            color = cell_content_color(inp, cell, bg)
+                            if color is None:
+                                continue
+                            key = ('color', int(color))
+                        keys_at[cross] = key
+                        content_at[cross] = content
 
-                # For each pair of same-color cells, fill between
-                color_positions = {}  # color → sorted list of positions
-                for pos, c in colors_at.items():
-                    color_positions.setdefault(c, []).append(pos)
+                key_positions = {}
+                for pos, key in keys_at.items():
+                    key_positions.setdefault(key, []).append(pos)
 
-                for color, positions in color_positions.items():
+                for key, positions in key_positions.items():
                     if len(positions) < 2:
                         continue
                     positions.sort()
                     lo, hi = positions[0], positions[-1]
                     src = content_at[lo]
                     for cross in range(lo, hi + 1):
-                        if cross not in colors_at:
+                        if cross not in keys_at:
                             gr = line if axis == 'row' else cross
                             gc = cross if axis == 'row' else line
                             cell = grid_info.cell_at(gr, gc)
                             if cell:
-                                # Fill this cell with the source content
                                 h, w = cell.height, cell.width
                                 sh, sw = src.shape
                                 fh, fw = min(h, sh), min(w, sw)
                                 result[cell.r0:cell.r0 + fh,
                                        cell.c0:cell.c0 + fw] = src[:fh, :fw]
 
-        if not np.array_equal(result, out):
-            all_ok = False
-            break
+        return result
 
-    if all_ok:
-        prog = SearchProgram(
-            steps=[SearchStep('grid_fill_between', {})],
-            provenance='derive:grid_fill_between',
-        )
-        if prog.verify(demos):
-            return [prog]
+    for mode in ('color', 'pattern'):
+        all_ok = True
+        for di, (inp, out) in enumerate(demos):
+            facts = all_facts[di]
+            grid_info = detect_separator_grid(facts)
+            if grid_info is None:
+                all_ok = False
+                break
+            result = _build_result(inp, facts, grid_info, mode)
+            if not np.array_equal(result, out):
+                all_ok = False
+                break
+
+        if all_ok:
+            prog = SearchProgram(
+                steps=[SearchStep('grid_fill_between', {'mode': mode})],
+                provenance=f'derive:grid_fill_between_{mode}',
+            )
+            if prog.verify(demos):
+                return [prog]
 
     return []
 

@@ -401,7 +401,7 @@ def _exec_slide(inp, step):
 
 
 def _exec_grid_fill_between(inp, step):
-    """Fill empty grid cells between same-color blocks along rows and columns."""
+    """Fill empty grid cells between repeated content along rows and columns."""
     from aria.guided.perceive import perceive
     from aria.search.grid_detect import (
         detect_separator_grid, cell_content, cell_has_content,
@@ -413,6 +413,7 @@ def _exec_grid_fill_between(inp, step):
     if grid_info is None:
         return inp
 
+    mode = (step.params or {}).get('mode', 'color')
     bg = facts.bg
     result = inp.copy()
 
@@ -421,30 +422,36 @@ def _exec_grid_fill_between(inp, step):
         n_cross = grid_info.n_cols if axis == 'row' else grid_info.n_rows
 
         for line in range(n_lines):
-            colors_at = {}
+            keys_at = {}
             content_at = {}
             for cross in range(n_cross):
                 gr = line if axis == 'row' else cross
                 gc = cross if axis == 'row' else line
                 cell = grid_info.cell_at(gr, gc)
                 if cell and cell_has_content(inp, cell, bg):
-                    c = cell_content_color(inp, cell, bg)
-                    if c is not None:
-                        colors_at[cross] = c
-                        content_at[cross] = cell_content(inp, cell, bg)
+                    content = cell_content(inp, cell, bg)
+                    if mode == 'pattern':
+                        key = (content.shape, content.tobytes())
+                    else:
+                        c = cell_content_color(inp, cell, bg)
+                        if c is None:
+                            continue
+                        key = ('color', int(c))
+                    keys_at[cross] = key
+                    content_at[cross] = content
 
-            color_positions = {}
-            for pos, c in colors_at.items():
-                color_positions.setdefault(c, []).append(pos)
+            key_positions = {}
+            for pos, key in keys_at.items():
+                key_positions.setdefault(key, []).append(pos)
 
-            for color, positions in color_positions.items():
+            for key, positions in key_positions.items():
                 if len(positions) < 2:
                     continue
                 positions.sort()
                 lo, hi = positions[0], positions[-1]
                 src = content_at[lo]
                 for cross in range(lo, hi + 1):
-                    if cross not in colors_at:
+                    if cross not in keys_at:
                         gr = line if axis == 'row' else cross
                         gc = cross if axis == 'row' else line
                         cell = grid_info.cell_at(gr, gc)
