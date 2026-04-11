@@ -238,6 +238,8 @@ class SearchProgram:
                 result = _exec_marker_stamp(result, step)
             elif step.action == 'registration_transfer':
                 result = _exec_registration_transfer(result, step)
+            elif step.action == 'grid_fill_between':
+                result = _exec_grid_fill_between(result, step)
             elif step.action == 'registration_anchor_transfer':
                 result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
@@ -394,6 +396,64 @@ def _exec_slide(inp, step):
                     nc = obj.col + c + shift * dc
                     if 0 <= nr < rows and 0 <= nc < cols:
                         result[nr, nc] = obj.color
+
+    return result
+
+
+def _exec_grid_fill_between(inp, step):
+    """Fill empty grid cells between same-color blocks along rows and columns."""
+    from aria.guided.perceive import perceive
+    from aria.search.grid_detect import (
+        detect_separator_grid, cell_content, cell_has_content,
+        cell_content_color,
+    )
+
+    facts = perceive(inp)
+    grid_info = detect_separator_grid(facts)
+    if grid_info is None:
+        return inp
+
+    bg = facts.bg
+    result = inp.copy()
+
+    for axis in ('row', 'col'):
+        n_lines = grid_info.n_rows if axis == 'row' else grid_info.n_cols
+        n_cross = grid_info.n_cols if axis == 'row' else grid_info.n_rows
+
+        for line in range(n_lines):
+            colors_at = {}
+            content_at = {}
+            for cross in range(n_cross):
+                gr = line if axis == 'row' else cross
+                gc = cross if axis == 'row' else line
+                cell = grid_info.cell_at(gr, gc)
+                if cell and cell_has_content(inp, cell, bg):
+                    c = cell_content_color(inp, cell, bg)
+                    if c is not None:
+                        colors_at[cross] = c
+                        content_at[cross] = cell_content(inp, cell, bg)
+
+            color_positions = {}
+            for pos, c in colors_at.items():
+                color_positions.setdefault(c, []).append(pos)
+
+            for color, positions in color_positions.items():
+                if len(positions) < 2:
+                    continue
+                positions.sort()
+                lo, hi = positions[0], positions[-1]
+                src = content_at[lo]
+                for cross in range(lo, hi + 1):
+                    if cross not in colors_at:
+                        gr = line if axis == 'row' else cross
+                        gc = cross if axis == 'row' else line
+                        cell = grid_info.cell_at(gr, gc)
+                        if cell:
+                            h, w = cell.height, cell.width
+                            sh, sw = src.shape
+                            fh, fw = min(h, sh), min(w, sw)
+                            result[cell.r0:cell.r0 + fh,
+                                   cell.c0:cell.c0 + fw] = src[:fh, :fw]
 
     return result
 
@@ -737,7 +797,7 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.RECOLOR_MAP, [ASTNode(Op.INPUT)], param=p.get('color_map', {}))
 
     if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil',
-                  'registration_transfer'):
+                  'registration_transfer', 'grid_fill_between'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 
