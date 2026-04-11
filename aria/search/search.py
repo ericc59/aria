@@ -19,6 +19,7 @@ from aria.search.ast import ASTNode, ASTProgram
 from aria.search.proposal_memory import load_default_search_prior
 from aria.search.candidate_rank import rank_search_candidates
 from aria.search.proposal_model import load_default_search_family_model
+from aria.search.macros import load_default_macro_library
 from aria.graph.signatures import compute_task_signatures
 from aria.types import DemoPair
 
@@ -41,6 +42,7 @@ def search_programs(
     )
     proposal_prior = load_default_search_prior()
     proposal_model = load_default_search_family_model()
+    macro_library = load_default_macro_library()
 
     # Phase 0a: Correspondence-derived programs (structural transitions)
     from aria.search.derive import derive_programs
@@ -105,6 +107,7 @@ def search_programs(
             task_signatures=task_signatures,
             prior=proposal_prior,
             model=proposal_model,
+            macro_library=macro_library,
             max_demos=min(2, len(demos)),
         )
         for prog in candidates:
@@ -123,6 +126,7 @@ def search_programs(
             task_signatures=task_signatures,
             prior=proposal_prior,
             model=proposal_model,
+            macro_library=macro_library,
             max_demos=min(2, len(demos)),
         )
         for prog in partials[:8]:

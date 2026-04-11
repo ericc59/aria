@@ -105,6 +105,20 @@ class MacroLibrary:
                 'macros': [m.to_dict() for m in self.macros],
             }, f, indent=2)
 
+    def score_signature(self, action_sig: str) -> float:
+        """Score an action signature by macro frequency and solve rate.
+
+        Returns 0.0 if no matching macro exists.
+        Used as a conservative ranking signal in candidate_rank.
+        """
+        best = 0.0
+        for m in self.macros:
+            if m.action_signature == action_sig:
+                # Weight: frequency * solve_rate (higher = more reliable)
+                score = m.frequency * m.solve_rate
+                best = max(best, score)
+        return best
+
     @classmethod
     def load_json(cls, path: str) -> MacroLibrary:
         lib = cls()
@@ -116,3 +130,24 @@ class MacroLibrary:
         except (FileNotFoundError, json.JSONDecodeError):
             pass
         return lib
+
+
+def _default_macro_library_path() -> str:
+    from pathlib import Path
+    return str(Path(__file__).resolve().parents[2] / 'results' / 'search_macro_library.json')
+
+
+_cached_macro_library: MacroLibrary | None = None
+
+
+def load_default_macro_library() -> MacroLibrary:
+    """Load the macro library from the default results path.
+
+    Returns an empty library if the file doesn't exist.
+    Cached after first load.
+    """
+    global _cached_macro_library
+    if _cached_macro_library is not None:
+        return _cached_macro_library
+    _cached_macro_library = MacroLibrary.load_json(_default_macro_library_path())
+    return _cached_macro_library

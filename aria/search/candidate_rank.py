@@ -2,7 +2,7 @@
 
 This is a small inference-policy layer above exact verification:
 - score partially-correct SearchPrograms with generic verifier-style features
-- combine that with the persistent proposal prior
+- combine that with the persistent proposal prior and macro library
 - reorder candidates before exact verification
 
 No task-specific logic. No learned model yet.
@@ -16,6 +16,7 @@ import numpy as np
 
 from aria.search.proposal_memory import SearchProposalPrior
 from aria.search.proposal_model import SearchFamilyModel
+from aria.search.macros import MacroLibrary
 from aria.search.sketch import SearchProgram
 
 
@@ -28,6 +29,7 @@ class SearchCandidateScore:
     palette_overlap_avg: float
     prior_score: float
     model_score: float
+    macro_score: float
     step_count: int
 
     @property
@@ -38,6 +40,7 @@ class SearchCandidateScore:
             self.execution_errors,
             self.pixel_diff_total,
             -self.palette_overlap_avg,
+            -self.macro_score,
             -self.model_score,
             -self.prior_score,
             self.step_count,
@@ -51,6 +54,7 @@ def score_search_program(
     task_signatures: frozenset[str],
     prior: SearchProposalPrior,
     model: SearchFamilyModel | None = None,
+    macro_library: MacroLibrary | None = None,
     max_demos: int = 2,
 ) -> SearchCandidateScore:
     demos_passed = 0
@@ -82,6 +86,7 @@ def score_search_program(
     )
     prior_score = prior.score_family(prog.signature, task_signatures)
     model_score = model.score_family(prog.signature, task_signatures) if model is not None else 0.0
+    macro_score = macro_library.score_signature(prog.signature) if macro_library is not None else 0.0
     return SearchCandidateScore(
         demos_passed=demos_passed,
         dims_correct=dims_correct,
@@ -90,6 +95,7 @@ def score_search_program(
         palette_overlap_avg=palette_overlap_avg,
         prior_score=prior_score,
         model_score=model_score,
+        macro_score=macro_score,
         step_count=len(prog.steps),
     )
 
@@ -101,6 +107,7 @@ def rank_search_candidates(
     task_signatures: frozenset[str],
     prior: SearchProposalPrior,
     model: SearchFamilyModel | None = None,
+    macro_library: MacroLibrary | None = None,
     max_demos: int = 2,
 ) -> list[SearchProgram]:
     scored = [
@@ -111,6 +118,7 @@ def rank_search_candidates(
                 task_signatures=task_signatures,
                 prior=prior,
                 model=model,
+                macro_library=macro_library,
                 max_demos=max_demos,
             ),
             idx,
