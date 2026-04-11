@@ -1,5 +1,12 @@
 ## 2026-04-10
 
+- fixed P1: `build_search_traces.py` now processes reports newest-first so fresh traces shadow stale ones instead of the reverse
+- fixed P1: `build_macro_library.py` now defaults to `--require-test-correct` so known-bad solves are excluded from the macro library; all macros now 100% test-correct
+- fixed P2: `MacroLibrary.score_candidate` now uses tiered matching on provenance + action_signature + selector_pattern (full/0.5×/0.25×) instead of collapsing to action_signature alone
+- added `_derive_registration_transfer`: modules move into frame openings based on shape/mask fit; finds large non-rectangular objects (frames), detects their bg-cell openings (rectangular and non-rectangular), matches small objects by mask compatibility, emits a registration_transfer step; `228f6490` now solves (previously unsolved, test correct)
+- added `_exec_registration_transfer` in sketch.py: execution-time frame/opening detection and shape-matched module placement
+- ASTProgram.execute now prefers SearchProgram execution when available, enabling non-AST actions like registration_transfer to work through the full eval pipeline
+- improved correspondence matching: `_match_cost` and `_classify_match` now have a near-shape same-color tier for objects that grow/shrink during movement (size ratio >= 0.5); catches 2 additional v2-eval movement detections (53→55); same-color near-size matches get cost 5-20 instead of 100+
 - registration/correspondence analysis: quantified the structural gap — 42 v2-eval tasks have per-object variable-offset movements, 20 have zero-detected movements (mostly additive, correctly classified). The per-object destination inference layer is the next major capability gap.
 - fixed P1: `Predicate` now has `to_dict`/`from_dict` for stable serialization; `StepSelect.to_dict` serializes predicates and nested selectors instead of silently dropping them; `from_dict` deserializes both back — `by_predicate` selectors now round-trip correctly through JSON
 - fixed P1: `crop_object_rule` derive path now stores the selector in `SearchStep.select` (not raw in params); `_exec_crop_object` accepts the select argument and uses `select_objects()` for rule-based selection
@@ -43,6 +50,12 @@
 - filled another canonical AST surface gap: `Op.TILE` now executes in `aria/search/executor.py`, so derived tile programs fail honestly as unsolved instead of crashing mid-eval refresh
 - added `/Users/ericc59/Dev/aria/docs/raw/aria_learning_roadmap.md`, a concrete implementation roadmap for moving `aria` toward low-level primitives + learned macros + learned routing + replay/consolidation
 - added `/Users/ericc59/Dev/aria/docs/raw/looped_models_vs_aria.md`, a short architecture note on what looped language model work suggests for `aria` and what not to over-infer from benchmark tables
+
+# 2026-04-11
+
+- added anchor-based registration transfer derive path (`registration_anchor_transfer`) with nearest-anchor matching and search-level execution
+- added `module_anchor_origin` helper to keep anchor selection consistent between derive and execution
+- added synthetic regression for anchor-based registration transfer
 
 ## 2026-04-09
 

@@ -154,6 +154,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_registration_transfer(all_transitions, all_facts, demos)
         results.extend(progs)
 
+    # Strategy 2g: Anchor-based registration transfer (modules align to anchor sites)
+    if not results:
+        progs = _derive_anchor_registration_transfer(all_facts, demos)
+        results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -1329,6 +1334,124 @@ def _derive_registration_transfer(all_transitions, all_facts, demos):
     )
     if prog.verify(demos):
         return [prog]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2g: Anchor-based registration transfer (modules to anchor sites)
+# ---------------------------------------------------------------------------
+
+def _derive_anchor_registration_transfer(all_facts, demos):
+    """Anchor-based registration using precomputed anchored shapes.
+
+    Detects: a base shape with anchor sites plus a single movable module
+    that relocates to a specific anchor site. Uses exact shape+anchor
+    overlay candidates to match the output.
+    """
+    from aria.search.registration import (
+        base_registration_patch,
+        cluster_movable_modules,
+        extract_anchored_shapes,
+        module_anchor_patch,
+        overlay_registration_candidates,
+    )
+
+    # Candidate color pairs from demo 0
+    inp0 = demos[0][0]
+    colors = sorted(set(int(v) for v in inp0.flatten()))
+    if len(colors) < 2:
+        return []
+
+    for shape_color in colors:
+        for anchor_color in colors:
+            if anchor_color == shape_color:
+                continue
+
+            all_ok = True
+
+            for di, (inp, out) in enumerate(demos):
+                facts = all_facts[di]
+                if shape_color == facts.bg or anchor_color == facts.bg:
+                    all_ok = False
+                    break
+                shapes = extract_anchored_shapes(
+                    inp, shape_color=shape_color, anchor_color=anchor_color,
+                )
+                if not any(bool(s.anchors_global) for s in shapes):
+                    all_ok = False
+                    break
+                base_idx, modules = cluster_movable_modules(shapes)
+                if base_idx is None or len(modules) != 1:
+                    all_ok = False
+                    break
+
+                base_patch, target_sites = base_registration_patch(
+                    shapes[base_idx], shape_color=shape_color,
+                )
+                if not shapes[base_idx].anchors_global:
+                    all_ok = False
+                    break
+                module_patch, module_mask, source_anchors = module_anchor_patch(
+                    inp, shapes, modules[0],
+                    shape_color=shape_color, anchor_color=anchor_color,
+                )
+                module_anchors_global = tuple(
+                    sorted({(ar, ac) for i in modules[0].component_indices
+                            for ar, ac in shapes[i].anchors_global})
+                )
+                if not module_anchors_global:
+                    all_ok = False
+                    break
+
+                candidates = overlay_registration_candidates(
+                    base_patch, target_sites, module_patch, module_mask, source_anchors,
+                    bg_color=facts.bg,
+                    shape_color=shape_color, anchor_color=anchor_color,
+                )
+                if not candidates:
+                    all_ok = False
+                    break
+
+                # Nearest-anchor rule: choose target site closest to module anchor
+                target_sites_global = [
+                    (shapes[base_idx].row + r, shapes[base_idx].col + c)
+                    for r, c in target_sites
+                ]
+                best = None
+                for ma in module_anchors_global:
+                    for ts, ts_g in zip(target_sites, target_sites_global):
+                        dist = abs(ma[0] - ts_g[0]) + abs(ma[1] - ts_g[1])
+                        key = (dist, ma, ts)
+                        if best is None or key < best:
+                            best = key
+                if best is None:
+                    all_ok = False
+                    break
+                _, chosen_anchor_global, chosen_target_site = best
+                from aria.search.registration import module_anchor_origin
+                r0, c0 = module_anchor_origin(shapes, modules[0])
+                chosen_source_anchor = (chosen_anchor_global[0] - r0, chosen_anchor_global[1] - c0)
+                # Verify candidate for chosen anchors matches output
+                match = None
+                for cand in candidates:
+                    if cand.target_site == chosen_target_site and cand.source_anchor == chosen_source_anchor:
+                        match = cand
+                        break
+                if match is None or not np.array_equal(match.canvas, out):
+                    all_ok = False
+                    break
+
+            if all_ok:
+                prog = SearchProgram(
+                    steps=[SearchStep('registration_anchor_transfer', {
+                        'shape_color': int(shape_color),
+                        'anchor_color': int(anchor_color),
+                    })],
+                    provenance='derive:registration_anchor_transfer',
+                )
+                if prog.verify(demos):
+                    return [prog]
+
     return []
 
 

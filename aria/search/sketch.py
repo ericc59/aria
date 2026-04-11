@@ -238,6 +238,8 @@ class SearchProgram:
                 result = _exec_marker_stamp(result, step)
             elif step.action == 'registration_transfer':
                 result = _exec_registration_transfer(result, step)
+            elif step.action == 'registration_anchor_transfer':
+                result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
                 result = _exec_quadrant_template_decode(result, step)
             elif step.action == 'frame_bbox_pack':
@@ -456,6 +458,82 @@ def _exec_registration_transfer(inp, step):
                             result[nr, nc] = m.color
 
     return result
+
+
+def _exec_registration_anchor_transfer(inp, step):
+    """Move a single anchored module to a fixed target site on the base."""
+    from aria.guided.perceive import perceive
+    from aria.search.registration import (
+        base_registration_patch,
+        cluster_movable_modules,
+        extract_anchored_shapes,
+        module_anchor_patch,
+        module_anchor_origin,
+        overlay_registration_candidates,
+    )
+
+    params = step.params or {}
+    shape_color = params.get('shape_color')
+    anchor_color = params.get('anchor_color')
+
+    if shape_color is None or anchor_color is None:
+        return inp
+
+    facts = perceive(inp)
+    if shape_color == facts.bg or anchor_color == facts.bg:
+        return inp
+    shapes = extract_anchored_shapes(
+        inp, shape_color=int(shape_color), anchor_color=int(anchor_color),
+    )
+    base_idx, modules = cluster_movable_modules(shapes)
+    if base_idx is None or len(modules) != 1:
+        return inp
+
+    base_patch, target_sites = base_registration_patch(
+        shapes[base_idx], shape_color=int(shape_color),
+    )
+    if not shapes[base_idx].anchors_global:
+        return inp
+
+    module_patch, module_mask, source_anchors = module_anchor_patch(
+        inp, shapes, modules[0],
+        shape_color=int(shape_color), anchor_color=int(anchor_color),
+    )
+    module_anchors_global = tuple(
+        sorted({(ar, ac) for i in modules[0].component_indices
+                for ar, ac in shapes[i].anchors_global})
+    )
+    if not module_anchors_global:
+        return inp
+
+    candidates = overlay_registration_candidates(
+        base_patch, target_sites, module_patch, module_mask, source_anchors,
+        bg_color=facts.bg, shape_color=int(shape_color),
+        anchor_color=int(anchor_color),
+    )
+    if not candidates:
+        return inp
+
+    target_sites_global = [
+        (shapes[base_idx].row + r, shapes[base_idx].col + c)
+        for r, c in target_sites
+    ]
+    best = None
+    for ma in module_anchors_global:
+        for ts, ts_g in zip(target_sites, target_sites_global):
+            dist = abs(ma[0] - ts_g[0]) + abs(ma[1] - ts_g[1])
+            key = (dist, ma, ts)
+            if best is None or key < best:
+                best = key
+    if best is None:
+        return inp
+    _, chosen_anchor_global, chosen_target_site = best
+    r0, c0 = module_anchor_origin(shapes, modules[0])
+    chosen_source_anchor = (chosen_anchor_global[0] - r0, chosen_anchor_global[1] - c0)
+    for cand in candidates:
+        if cand.target_site == chosen_target_site and cand.source_anchor == chosen_source_anchor:
+            return cand.canvas
+    return inp
 
 
 def _exec_marker_stamp(inp, step):

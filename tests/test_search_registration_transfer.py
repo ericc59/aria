@@ -55,3 +55,33 @@ def test_228f6490_solves():
             break
 
     assert solved, "no derive program verified for 228f6490"
+
+
+def test_anchor_registration_transfer_synthetic():
+    """Anchor-based transfer should be derivable on synthetic input."""
+    from aria.guided.perceive import perceive
+    from aria.search.derive import _derive_anchor_registration_transfer
+
+    inp = np.zeros((7, 7), dtype=np.int8)
+    # Base shape (color 2)
+    inp[0:3, 0:3] = 2
+    # Base anchor (color 3) adjacent to base
+    inp[0, 1] = 3
+    # Module (color 2) with anchor (color 3)
+    inp[4:6, 4:6] = 2
+    inp[4, 4] = 3
+
+    prog = SearchProgram(
+        steps=[SearchStep('registration_anchor_transfer', {
+            'shape_color': 2,
+            'anchor_color': 3,
+        })],
+        provenance='test',
+    )
+    out = prog.execute(inp)
+    demos = [(inp, out)]
+    all_facts = [perceive(inp)]
+
+    progs = _derive_anchor_registration_transfer(all_facts, demos)
+    assert progs, "anchor registration derive returned no candidates"
+    assert all(p.verify(demos) for p in progs)

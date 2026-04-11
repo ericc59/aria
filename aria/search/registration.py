@@ -175,6 +175,28 @@ def module_anchor_patch(
     return patch, mask, source_anchors
 
 
+def module_anchor_origin(
+    shapes: list[AnchoredShape],
+    module: MovableModule,
+) -> tuple[int, int]:
+    """Return the (r0, c0) origin used by module_anchor_patch."""
+    idxs = module.component_indices
+    rows = [shapes[i].row for i in idxs]
+    cols = [shapes[i].col for i in idxs]
+    bottoms = [shapes[i].row + shapes[i].height - 1 for i in idxs]
+    rights = [shapes[i].col + shapes[i].width - 1 for i in idxs]
+    anchor_rows = [ar for i in idxs for ar, _ in shapes[i].anchors_global]
+    anchor_cols = [ac for i in idxs for _, ac in shapes[i].anchors_global]
+    r0 = min(rows + anchor_rows) if anchor_rows else min(rows)
+    c0 = min(cols + anchor_cols) if anchor_cols else min(cols)
+    r1 = max(bottoms + anchor_rows) if anchor_rows else max(bottoms)
+    c1 = max(rights + anchor_cols) if anchor_cols else max(rights)
+    if r0 > r1 or c0 > c1:
+        r0 = min(rows)
+        c0 = min(cols)
+    return int(r0), int(c0)
+
+
 def base_registration_patch(
     base: AnchoredShape,
     *,
