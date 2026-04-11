@@ -1,9 +1,27 @@
 ## 2026-04-10
 
+- registration/correspondence analysis: quantified the structural gap — 42 v2-eval tasks have per-object variable-offset movements, 20 have zero-detected movements (mostly additive, correctly classified). The per-object destination inference layer is the next major capability gap.
+- fixed P1: `Predicate` now has `to_dict`/`from_dict` for stable serialization; `StepSelect.to_dict` serializes predicates and nested selectors instead of silently dropping them; `from_dict` deserializes both back — `by_predicate` selectors now round-trip correctly through JSON
+- fixed P1: `crop_object_rule` derive path now stores the selector in `SearchStep.select` (not raw in params); `_exec_crop_object` accepts the select argument and uses `select_objects()` for rule-based selection
+- fixed P2: `MacroLibrary.score_candidate` (renamed from `score_signature`) now matches on provenance + action_signature — exact provenance match gets full weight, action-only match gets half weight, preserving the miner's grouping dimensions
+- extended `_derive_rank_recolor` to handle size-group ties: objects with the same size now correctly get the same target color, using deduped size_group→color mappings; `6e82a1ae` now solves (previously unsolved); moved rank_recolor before conditional_dispatch to avoid accidental partition matches
+- fixed `_derive_marker_stamp` pixel attribution: each added pixel is now assigned to its nearest marker (by L1 distance) instead of all markers within a half-grid radius, preventing template inconsistency when markers are close
 - added `aria/search/selection_facts.py`: rich per-object boolean fact extraction (31 structural features + per-color) for derive-time selector rule induction
-- added `Pred.SELECTION_RULE` and `StepSelect('by_rule')`: conjunction/DNF selectors induced via `induce_boolean_dnf` over pooled cross-demo object facts, enabling richer selection conditions than the previous single-predicate path
+- added `StepSelect('by_rule')` with `select_objects()` at the search level: conjunction/DNF selectors induced via `induce_boolean_dnf` over pooled cross-demo object facts; rule evaluation stays in `search/` layer (never touches `guided/clause.py`), executor dispatches via `_select_targets` helper
 - upgraded `_find_selector_for_group` with cross-demo verification: selectors found on demo 0 are now verified against all demos before use, falling back to cross-demo rule induction when simple predicates don't generalize
 - upgraded `_find_selector` with rule induction fallback: when no single predicate exactly separates target objects, bounded conjunction search (up to 3 atoms) over structural facts is attempted
+- added `_derive_action_first_dispatch`: groups changed objects by observed action (match_type) across all demos, then finds cross-demo selectors for each action group — handles cases where selector-first partitioning fails to generalize
+- added `_derive_rank_recolor`: detects when all changed objects are recolored to distinct colors by size rank, decomposes into per-rank recolor steps with induced selectors; `08ed6ac7` now solves (previously unsolved)
+- added `_find_selector_for_oid_sets`: shared cross-demo selector finder that takes explicit OID sets per demo, used by both action-first dispatch and rank-recolor
+- added `aria/search/trace_schema.py`: `SolveTrace` dataclass capturing task_id, task_signatures, provenance, step_actions, step_selectors, full program_dict, and test_correct — the structured record for future macro mining
+- added `aria/search/trace_capture.py`: `capture_solve_trace()` bridges SearchProgram → SolveTrace; `_summarize_selector` produces readable one-line selector descriptions
+- added `aria/search/macros.py`: `Macro` and `MacroLibrary` schema for learned compositions above primitives — stored patterns that are reducible to SearchProgram steps, not new runtime ontology (Phase 3 groundwork)
+- integrated trace capture into search/eval: `ASTProgram.search_program` carries the SearchProgram through `search_programs` → `evaluate_task`, which now stores `solve_trace` in eval outcomes
+- added `scripts/build_search_traces.py`: offline export of solved traces from eval reports to JSONL for macro mining
+- added `aria/search/macro_miner.py`: first exact macro miner — groups traces by `(provenance, action_signature)`, filters by frequency/step count, produces `Macro` objects with structural names and solve-rate metadata
+- added `scripts/build_macro_library.py`: offline macro library builder from trace JSONL; first run on v1-train produced 6 macros (color_map freq=5, color_stencil freq=3, uniform_recolor freq=3, crop_object freq=2, crop_fixed freq=2, pixel_scale freq=2)
+- fixed `StepSelect.to_dict` serialization: `by_predicate` selectors with `Predicate` objects now skip non-serializable params instead of crashing JSON encoding
+- closed the first consolidation loop: `MacroLibrary.score_signature()` provides a ranking signal in `candidate_rank.py`; `search_programs` loads the macro library via `load_default_macro_library()` and passes it through all ranking calls; macro-matched candidates rank higher without bypassing exact verification
 - added canonical `TEMPLATE_BROADCAST`: mask-driven blockwise template placement (out = kron(input != bg, input)); `007bbfb7` now solves via search stack in 0.02s
 - filled 6 missing low-level AST executor cases: `SLIDE`, `STAMP`, `TRANSFORM_OBJ`, `FILL_INTERIOR`, `FILL_ENCLOSED`, `PERIODIC_EXTEND` — all had AST lowering paths from search but no executor dispatch
 - admission audit: quarantined `STACKED_GLYPH_TRACE` from canonical `aria/search`; it depended on a task-local glyph codebook rather than a reusable execution primitive
