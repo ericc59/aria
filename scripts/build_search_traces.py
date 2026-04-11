@@ -23,7 +23,7 @@ def extract_traces(report_paths: list[Path]) -> list[dict]:
     traces: list[dict] = []
     seen_tasks: set[str] = set()
 
-    for path in sorted(report_paths):
+    for path in sorted(report_paths, reverse=True):  # newest first
         try:
             with open(path) as f:
                 data = json.load(f)

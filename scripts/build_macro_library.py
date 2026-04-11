@@ -40,7 +40,11 @@ def main():
     parser.add_argument('--min-steps', type=int, default=1,
                         help='Minimum steps per macro')
     parser.add_argument('--require-test-correct', action='store_true',
-                        help='Only include test-correct traces')
+                        default=True,
+                        help='Only include test-correct traces (default: True)')
+    parser.add_argument('--no-require-test-correct', dest='require_test_correct',
+                        action='store_false',
+                        help='Include all traces regardless of test correctness')
     args = parser.parse_args()
 
     # Load traces

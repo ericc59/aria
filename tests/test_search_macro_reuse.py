@@ -23,21 +23,23 @@ def test_load_default_macro_library():
 
 
 def test_macro_library_score_candidate_match():
-    """score_candidate should return > 0 for matching macros."""
+    """score_candidate should use tiered matching."""
     lib = MacroLibrary()
     lib.add(Macro(name='test', frequency=5, solve_rate=1.0,
                   action_signature='recolor_map',
-                  source_provenances=['derive:color_map']))
-    lib.add(Macro(name='other', frequency=3, solve_rate=0.8,
+                  source_provenances=['derive:color_map'],
+                  selector_pattern='recolor_map()'))
+    lib.add(Macro(name='other', frequency=4, solve_rate=1.0,
                   action_signature='scale',
-                  source_provenances=['derive:pixel_scale']))
+                  source_provenances=['derive:pixel_scale'],
+                  selector_pattern='scale()'))
 
-    # Exact provenance match → full weight
-    assert lib.score_candidate('recolor_map', 'derive:color_map') == 5.0
-    # Action-only match (no provenance) → half weight
-    assert abs(lib.score_candidate('recolor_map', '') - 2.5) < 1e-9
-    # Exact provenance for scale
-    assert abs(lib.score_candidate('scale', 'derive:pixel_scale') - 2.4) < 1e-9
+    # Full match (provenance + action + selector) → full weight
+    assert lib.score_candidate('recolor_map', 'derive:color_map', 'recolor_map()') == 5.0
+    # Provenance match, no selector → 0.5×
+    assert lib.score_candidate('recolor_map', 'derive:color_map', '') == 2.5
+    # Action-only match → 0.25×
+    assert lib.score_candidate('recolor_map', '', '') == 1.25
     # No match
     assert lib.score_candidate('nonexistent') == 0.0
 
