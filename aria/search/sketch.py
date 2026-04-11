@@ -43,7 +43,14 @@ class StepSelect:
     def to_dict(self) -> dict:
         d: dict = {'role': self.role}
         if self.params:
-            d['params'] = {str(k): v for k, v in self.params.items()}
+            serializable = {}
+            for k, v in self.params.items():
+                # Skip non-serializable Predicate objects
+                if isinstance(v, list) and v and hasattr(v[0], 'pred'):
+                    continue
+                serializable[str(k)] = v
+            if serializable:
+                d['params'] = serializable
         if self.from_step is not None:
             d['from_step'] = self.from_step
         return d
