@@ -23,7 +23,8 @@ def extract_traces(report_paths: list[Path]) -> list[dict]:
     traces: list[dict] = []
     seen_tasks: set[str] = set()
 
-    for path in sorted(report_paths, reverse=True):  # newest first
+    for path in sorted(report_paths, key=lambda p: p.stat().st_mtime
+                        if p.exists() else 0, reverse=True):  # newest mtime first
         try:
             with open(path) as f:
                 data = json.load(f)
