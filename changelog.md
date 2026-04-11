@@ -56,6 +56,8 @@
 - added anchor-based registration transfer derive path (`registration_anchor_transfer`) with nearest-anchor matching and search-level execution
 - added `module_anchor_origin` helper to keep anchor selection consistent between derive and execution
 - added synthetic regression for anchor-based registration transfer
+- generalized anchor registration transfer to multiple modules using nearest-anchor assignment, with shared derive/exec movement logic
+- added `module_anchor_centroid` helper to support assignment
 
 ## 2026-04-09
 

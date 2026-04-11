@@ -1368,6 +1368,7 @@ def _derive_anchor_registration_transfer(all_facts, demos):
                 continue
 
             all_ok = True
+            module_count_ref = None
 
             for di, (inp, out) in enumerate(demos):
                 facts = all_facts[di]
@@ -1381,7 +1382,12 @@ def _derive_anchor_registration_transfer(all_facts, demos):
                     all_ok = False
                     break
                 base_idx, modules = cluster_movable_modules(shapes)
-                if base_idx is None or len(modules) != 1:
+                if base_idx is None or not modules:
+                    all_ok = False
+                    break
+                if module_count_ref is None:
+                    module_count_ref = len(modules)
+                elif len(modules) != module_count_ref:
                     all_ok = False
                     break
 
@@ -1391,53 +1397,74 @@ def _derive_anchor_registration_transfer(all_facts, demos):
                 if not shapes[base_idx].anchors_global:
                     all_ok = False
                     break
-                module_patch, module_mask, source_anchors = module_anchor_patch(
-                    inp, shapes, modules[0],
-                    shape_color=shape_color, anchor_color=anchor_color,
-                )
-                module_anchors_global = tuple(
-                    sorted({(ar, ac) for i in modules[0].component_indices
-                            for ar, ac in shapes[i].anchors_global})
-                )
-                if not module_anchors_global:
-                    all_ok = False
-                    break
 
-                candidates = overlay_registration_candidates(
-                    base_patch, target_sites, module_patch, module_mask, source_anchors,
-                    bg_color=facts.bg,
-                    shape_color=shape_color, anchor_color=anchor_color,
-                )
-                if not candidates:
-                    all_ok = False
-                    break
-
-                # Nearest-anchor rule: choose target site closest to module anchor
+                # Nearest-anchor assignment: module anchors to target sites
                 target_sites_global = [
                     (shapes[base_idx].row + r, shapes[base_idx].col + c)
                     for r, c in target_sites
                 ]
-                best = None
-                for ma in module_anchors_global:
-                    for ts, ts_g in zip(target_sites, target_sites_global):
-                        dist = abs(ma[0] - ts_g[0]) + abs(ma[1] - ts_g[1])
-                        key = (dist, ma, ts)
-                        if best is None or key < best:
-                            best = key
-                if best is None:
+                if len(modules) > len(target_sites_global):
                     all_ok = False
                     break
-                _, chosen_anchor_global, chosen_target_site = best
-                from aria.search.registration import module_anchor_origin
-                r0, c0 = module_anchor_origin(shapes, modules[0])
-                chosen_source_anchor = (chosen_anchor_global[0] - r0, chosen_anchor_global[1] - c0)
-                # Verify candidate for chosen anchors matches output
-                match = None
-                for cand in candidates:
-                    if cand.target_site == chosen_target_site and cand.source_anchor == chosen_source_anchor:
-                        match = cand
+                from aria.search.registration import module_anchor_centroid, module_anchor_origin
+                from scipy.optimize import linear_sum_assignment
+                cost = np.zeros((len(modules), len(target_sites_global)), dtype=float)
+                for mi, module in enumerate(modules):
+                    mr, mc = module_anchor_centroid(shapes, module)
+                    for ti, (tr, tc) in enumerate(target_sites_global):
+                        cost[mi, ti] = abs(mr - tr) + abs(mc - tc)
+                rows, cols = linear_sum_assignment(cost)
+                # Build candidate output by moving modules to assigned sites
+                result = inp.copy()
+                used_sites = set()
+                for mi, ti in zip(rows, cols):
+                    if ti in used_sites:
+                        continue
+                    used_sites.add(ti)
+                    module = modules[mi]
+                    module_anchors_global = tuple(
+                        sorted({(ar, ac) for i in module.component_indices
+                                for ar, ac in shapes[i].anchors_global})
+                    )
+                    if not module_anchors_global:
+                        all_ok = False
                         break
-                if match is None or not np.array_equal(match.canvas, out):
+                    target_global = target_sites_global[ti]
+                    best_anchor = None
+                    best_dist = float('inf')
+                    for ma in module_anchors_global:
+                        dist = abs(ma[0] - target_global[0]) + abs(ma[1] - target_global[1])
+                        if dist < best_dist:
+                            best_dist = dist
+                            best_anchor = ma
+                    if best_anchor is None:
+                        all_ok = False
+                        break
+                    r0, c0 = module_anchor_origin(shapes, module)
+                    chosen_source_anchor = (best_anchor[0] - r0, best_anchor[1] - c0)
+                    dr = target_global[0] - best_anchor[0]
+                    dc = target_global[1] - best_anchor[1]
+
+                    # Erase module from old position
+                    for obj_idx in module.component_indices:
+                        obj = shapes[obj_idx]
+                        for r in range(obj.height):
+                            for c in range(obj.width):
+                                if obj.patch[r, c] == obj.color:
+                                    result[obj.row + r, obj.col + c] = facts.bg
+                    # Place module at new position
+                    for obj_idx in module.component_indices:
+                        obj = shapes[obj_idx]
+                        for r in range(obj.height):
+                            for c in range(obj.width):
+                                if obj.patch[r, c] == obj.color:
+                                    nr = obj.row + r + dr
+                                    nc = obj.col + c + dc
+                                    if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                                        result[nr, nc] = obj.color
+                if not all_ok:
+                    break
+                if not np.array_equal(result, out):
                     all_ok = False
                     break
 

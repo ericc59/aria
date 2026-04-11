@@ -461,7 +461,7 @@ def _exec_registration_transfer(inp, step):
 
 
 def _exec_registration_anchor_transfer(inp, step):
-    """Move a single anchored module to a fixed target site on the base."""
+    """Move anchored modules to target sites using nearest-anchor assignment."""
     from aria.guided.perceive import perceive
     from aria.search.registration import (
         base_registration_patch,
@@ -469,8 +469,10 @@ def _exec_registration_anchor_transfer(inp, step):
         extract_anchored_shapes,
         module_anchor_patch,
         module_anchor_origin,
+        module_anchor_centroid,
         overlay_registration_candidates,
     )
+    from scipy.optimize import linear_sum_assignment
 
     params = step.params or {}
     shape_color = params.get('shape_color')
@@ -486,7 +488,7 @@ def _exec_registration_anchor_transfer(inp, step):
         inp, shape_color=int(shape_color), anchor_color=int(anchor_color),
     )
     base_idx, modules = cluster_movable_modules(shapes)
-    if base_idx is None or len(modules) != 1:
+    if base_idx is None or not modules:
         return inp
 
     base_patch, target_sites = base_registration_patch(
@@ -495,45 +497,77 @@ def _exec_registration_anchor_transfer(inp, step):
     if not shapes[base_idx].anchors_global:
         return inp
 
-    module_patch, module_mask, source_anchors = module_anchor_patch(
-        inp, shapes, modules[0],
-        shape_color=int(shape_color), anchor_color=int(anchor_color),
-    )
-    module_anchors_global = tuple(
-        sorted({(ar, ac) for i in modules[0].component_indices
-                for ar, ac in shapes[i].anchors_global})
-    )
-    if not module_anchors_global:
-        return inp
-
-    candidates = overlay_registration_candidates(
-        base_patch, target_sites, module_patch, module_mask, source_anchors,
-        bg_color=facts.bg, shape_color=int(shape_color),
-        anchor_color=int(anchor_color),
-    )
-    if not candidates:
-        return inp
-
     target_sites_global = [
         (shapes[base_idx].row + r, shapes[base_idx].col + c)
         for r, c in target_sites
     ]
-    best = None
-    for ma in module_anchors_global:
-        for ts, ts_g in zip(target_sites, target_sites_global):
-            dist = abs(ma[0] - ts_g[0]) + abs(ma[1] - ts_g[1])
-            key = (dist, ma, ts)
-            if best is None or key < best:
-                best = key
-    if best is None:
+    if not target_sites_global or len(modules) > len(target_sites_global):
         return inp
-    _, chosen_anchor_global, chosen_target_site = best
-    r0, c0 = module_anchor_origin(shapes, modules[0])
-    chosen_source_anchor = (chosen_anchor_global[0] - r0, chosen_anchor_global[1] - c0)
-    for cand in candidates:
-        if cand.target_site == chosen_target_site and cand.source_anchor == chosen_source_anchor:
-            return cand.canvas
-    return inp
+
+    # Assign modules to target sites by centroid distance
+    cost = np.zeros((len(modules), len(target_sites_global)), dtype=float)
+    for mi, module in enumerate(modules):
+        mr, mc = module_anchor_centroid(shapes, module)
+        for ti, (tr, tc) in enumerate(target_sites_global):
+            cost[mi, ti] = abs(mr - tr) + abs(mc - tc)
+    rows, cols = linear_sum_assignment(cost)
+
+    result = inp.copy()
+    used_openings = set()
+    for mi, ti in zip(rows, cols):
+        module = modules[mi]
+        target_site = target_sites[ti]
+        if ti in used_openings:
+            continue
+        used_openings.add(ti)
+
+        module_patch, module_mask, source_anchors = module_anchor_patch(
+            inp, shapes, module,
+            shape_color=int(shape_color), anchor_color=int(anchor_color),
+        )
+        module_anchors_global = tuple(
+            sorted({(ar, ac) for i in module.component_indices
+                    for ar, ac in shapes[i].anchors_global})
+        )
+        if not module_anchors_global:
+            continue
+        # Pick source anchor closest to target site
+        target_global = target_sites_global[ti]
+        best_anchor = None
+        best_dist = float('inf')
+        for ma in module_anchors_global:
+            dist = abs(ma[0] - target_global[0]) + abs(ma[1] - target_global[1])
+            if dist < best_dist:
+                best_dist = dist
+                best_anchor = ma
+        if best_anchor is None:
+            continue
+
+        r0, c0 = module_anchor_origin(shapes, module)
+        chosen_source_anchor = (best_anchor[0] - r0, best_anchor[1] - c0)
+
+        dr = target_global[0] - best_anchor[0]
+        dc = target_global[1] - best_anchor[1]
+
+        # Erase module from old position
+        for obj_idx in module.component_indices:
+            obj = shapes[obj_idx]
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.patch[r, c] == obj.color:
+                        result[obj.row + r, obj.col + c] = facts.bg
+        # Place module at new position
+        for obj_idx in module.component_indices:
+            obj = shapes[obj_idx]
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.patch[r, c] == obj.color:
+                        nr = obj.row + r + dr
+                        nc = obj.col + c + dc
+                        if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                            result[nr, nc] = obj.color
+
+    return result
 
 
 def _exec_marker_stamp(inp, step):

@@ -67,9 +67,12 @@ def test_anchor_registration_transfer_synthetic():
     inp[0:3, 0:3] = 2
     # Base anchor (color 3) adjacent to base
     inp[0, 1] = 3
-    # Module (color 2) with anchor (color 3)
+    # Module 1 (color 2) with anchor (color 3)
     inp[4:6, 4:6] = 2
     inp[4, 4] = 3
+    # Module 2 (color 2) with anchor (color 3)
+    inp[1:3, 5:7] = 2
+    inp[1, 5] = 3
 
     prog = SearchProgram(
         steps=[SearchStep('registration_anchor_transfer', {

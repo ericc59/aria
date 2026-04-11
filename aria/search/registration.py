@@ -45,6 +45,22 @@ class RegistrationCandidate:
     canvas: np.ndarray
 
 
+def module_anchor_centroid(
+    shapes: list[AnchoredShape],
+    module: MovableModule,
+) -> tuple[float, float]:
+    """Compute centroid of all anchors in a module (global coords)."""
+    anchors = [(ar, ac) for idx in module.component_indices
+               for ar, ac in shapes[idx].anchors_global]
+    if not anchors:
+        rows = [shapes[i].row + shapes[i].height / 2 for i in module.component_indices]
+        cols = [shapes[i].col + shapes[i].width / 2 for i in module.component_indices]
+        return (float(sum(rows) / len(rows)), float(sum(cols) / len(cols)))
+    r = sum(a[0] for a in anchors) / len(anchors)
+    c = sum(a[1] for a in anchors) / len(anchors)
+    return (float(r), float(c))
+
+
 def extract_anchored_shapes(
     grid: Grid,
     *,
