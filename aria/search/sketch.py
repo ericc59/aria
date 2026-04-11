@@ -603,6 +603,14 @@ def _exec_crop_object(grid, params):
                 return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
             except (ValueError, IndexError):
                 pass
+        # Try rule-based selector (from selection_facts)
+        sel = params.get('selector')
+        if sel is not None:
+            facts = perceive(grid)
+            selected = sel.select_objects(facts)
+            if len(selected) == 1:
+                obj = selected[0]
+                return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
         return grid
     facts = perceive(grid)
     selected = prim_select(facts, [Predicate(pred)])

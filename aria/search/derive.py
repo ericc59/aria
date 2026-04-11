@@ -130,6 +130,12 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     progs = _derive_uniform(all_transitions, all_facts, demos)
     results.extend(progs)
 
+    # Strategy 1b: Rank/group recolor (all recolored by size rank — more
+    # specific than dispatch, runs first to avoid accidental partition matches)
+    if not results:
+        progs = _derive_rank_recolor(all_transitions, all_facts, demos)
+        results.extend(progs)
+
     # Strategy 2: Multi-group dispatch (different groups → different actions)
     progs = _derive_dispatch(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -141,11 +147,6 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     # Strategy 2c: Action-first dispatch (group by observed action, find selectors)
     if not results:
         progs = _derive_action_first_dispatch(all_transitions, all_facts, demos)
-        results.extend(progs)
-
-    # Strategy 2d: Rank-recolor (all objects recolored by size rank)
-    if not results:
-        progs = _derive_rank_recolor(all_transitions, all_facts, demos)
         results.extend(progs)
 
     # Strategy 3: Stamp/creation (new objects from input object shapes)
@@ -352,6 +353,37 @@ def _derive_direct_crop(demos):
                 steps=[SearchStep('crop_object', {'predicate': f'color_{color}'})],
                 provenance=f'derive:crop_object_color_{color}',
             )]
+
+    # Try: cross-demo rule-induction crop (output = bbox of an object
+    # selected by a conjunction of structural features)
+    target_oids_per_demo = []
+    all_crop_facts = []
+    all_crop_ok = True
+    for inp, out in demos:
+        facts = perceive(inp)
+        all_crop_facts.append(facts)
+        oh_d, ow_d = out.shape
+        found_obj = None
+        for obj in facts.objects:
+            if obj.height == oh_d and obj.width == ow_d:
+                crop = inp[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
+                if np.array_equal(crop, out):
+                    found_obj = obj
+                    break
+        if found_obj is None:
+            all_crop_ok = False
+            break
+        target_oids_per_demo.append({found_obj.oid})
+
+    if all_crop_ok and target_oids_per_demo:
+        sel = _find_selector_for_oid_sets(target_oids_per_demo, all_crop_facts)
+        if sel is not None:
+            prog = SearchProgram(
+                steps=[SearchStep('crop_object', {'predicate': 'by_rule', 'selector': sel})],
+                provenance='derive:crop_object_rule',
+            )
+            if prog.verify(demos):
+                return [prog]
 
     # Try: fixed offset crop
     oh, ow = demos[0][1].shape
@@ -1058,11 +1090,14 @@ def _derive_action_first_dispatch(all_transitions, all_facts, demos):
 # ---------------------------------------------------------------------------
 
 def _derive_rank_recolor(all_transitions, all_facts, demos):
-    """All changed objects recolored to distinct colors by size rank.
+    """All changed objects recolored by size rank or size group.
 
-    Detects: all objects get match_type='recolored', target colors are
-    distinct and map consistently to size rank across demos.
-    Emits N separate recolor steps, each with a per-rank selector.
+    Detects: all objects get match_type='recolored', target colors
+    map consistently to size rank across demos. Handles both:
+    - strict rank (each object gets a unique color by rank)
+    - size groups (objects with same size get same color)
+
+    Emits N separate recolor steps, each with a per-group selector.
     """
     # Check: all changed objects are recolored
     for trans in all_transitions:
@@ -1072,48 +1107,63 @@ def _derive_rank_recolor(all_transitions, all_facts, demos):
         if not all(t.match_type == 'recolored' for t in changed):
             return []
 
-    # In each demo, sort changed objects by size (desc) and extract rank→color
-    rank_maps = []
+    # In each demo, build size_group → color mapping (deduplicated)
+    group_maps = []
     for trans in all_transitions:
-        changed = [(t.in_obj.size, t.color_to, t.in_obj.oid)
-                   for t in trans if t.match_type == 'recolored' and t.in_obj]
-        changed.sort(key=lambda x: -x[0])
-        rank_map = [color for _, color, _ in changed]
-        rank_maps.append(rank_map)
-
-    # Consistent rank count and rank→color mapping
-    if not rank_maps:
-        return []
-    n_ranks = len(rank_maps[0])
-    if n_ranks < 2:
-        return []
-    for rm in rank_maps[1:]:
-        if len(rm) != n_ranks:
+        size_to_color = {}
+        consistent = True
+        for t in trans:
+            if t.match_type != 'recolored' or not t.in_obj:
+                continue
+            sz = t.in_obj.size
+            if sz in size_to_color:
+                if size_to_color[sz] != t.color_to:
+                    consistent = False
+                    break
+            else:
+                size_to_color[sz] = t.color_to
+        if not consistent:
             return []
-        if rm != rank_maps[0]:
+        # Sort by size descending → color sequence (deduped)
+        group_seq = tuple(c for _, c in sorted(size_to_color.items(), key=lambda x: -x[0]))
+        group_maps.append((size_to_color, group_seq))
+
+    if not group_maps:
+        return []
+    n_groups = len(group_maps[0][1])
+    if n_groups < 2:
+        return []
+    ref_seq = group_maps[0][1]
+    for _, seq in group_maps[1:]:
+        if seq != ref_seq:
             return []
 
-    # Build per-rank selectors and recolor steps
-    target_colors = rank_maps[0]
+    # Build per-group selectors and recolor steps
     steps = []
+    ref_sizes = sorted(group_maps[0][0].keys(), reverse=True)
 
-    for rank_idx in range(n_ranks):
-        # Collect OIDs for this rank in each demo
+    for gi, ref_size in enumerate(ref_sizes):
+        target_color = group_maps[0][0][ref_size]
+
+        # Collect OIDs for objects in this size group in each demo
         target_oids_per_demo = []
         for di, trans in enumerate(all_transitions):
-            changed = [(t.in_obj.size, t.in_obj.oid)
-                       for t in trans if t.match_type == 'recolored' and t.in_obj]
-            changed.sort(key=lambda x: -x[0])
-            if rank_idx < len(changed):
-                target_oids_per_demo.append({changed[rank_idx][1]})
-            else:
+            demo_size = sorted(group_maps[di][0].keys(), reverse=True)
+            if gi >= len(demo_size):
                 return []
+            group_size = demo_size[gi]
+            oids = {t.in_obj.oid for t in trans
+                    if t.match_type == 'recolored' and t.in_obj
+                    and t.in_obj.size == group_size}
+            if not oids:
+                return []
+            target_oids_per_demo.append(oids)
 
         sel = _find_selector_for_oid_sets(target_oids_per_demo, all_facts)
         if sel is None:
             return []
 
-        steps.append(SearchStep('recolor', {'color': target_colors[rank_idx]}, sel))
+        steps.append(SearchStep('recolor', {'color': target_color}, sel))
 
     prog = SearchProgram(steps=steps, provenance='derive:rank_recolor')
     if prog.verify(demos):
@@ -1868,21 +1918,32 @@ def _derive_marker_stamp(demos, all_facts):
     for m in markers:
         color_markers[m.color].append(m)
 
-    # For each marker color, learn template from added pixels near markers
+    # Attribute each added pixel to its nearest marker
+    all_markers = [m for mlist in color_markers.values() for m in mlist]
+    added_positions = list(zip(*np.where(added)))
+    pixel_owner: dict[tuple[int, int], int] = {}  # (r,c) → marker index
+    for r, c in added_positions:
+        best_dist = float('inf')
+        best_idx = -1
+        for mi, m in enumerate(all_markers):
+            d = abs(r - round(m.center_row)) + abs(c - round(m.center_col))
+            if d < best_dist:
+                best_dist = d
+                best_idx = mi
+        pixel_owner[(r, c)] = best_idx
+
+    # For each marker color, learn template from owned added pixels
     templates = {}  # color → {(dr, dc): pixel_color}
     for color, mlist in color_markers.items():
         per_marker_templates = []
         for m in mlist:
             cr = round(m.center_row)
             cc = round(m.center_col)
+            mi = all_markers.index(m)
             template = {}
-            for r in range(out0.shape[0]):
-                for c in range(out0.shape[1]):
-                    if added[r, c]:
-                        dr, dc = r - cr, c - cc
-                        # Only attribute pixels close to this marker
-                        if abs(dr) <= max(out0.shape) // 2 and abs(dc) <= max(out0.shape) // 2:
-                            template[(dr, dc)] = int(out0[r, c])
+            for (r, c), owner in pixel_owner.items():
+                if owner == mi:
+                    template[(r - cr, c - cc)] = int(out0[r, c])
             per_marker_templates.append(template)
 
         # Check consistency: all markers of this color → same template
