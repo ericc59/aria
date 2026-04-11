@@ -379,7 +379,7 @@ def _derive_direct_crop(demos):
         sel = _find_selector_for_oid_sets(target_oids_per_demo, all_crop_facts)
         if sel is not None:
             prog = SearchProgram(
-                steps=[SearchStep('crop_object', {'predicate': 'by_rule', 'selector': sel})],
+                steps=[SearchStep('crop_object', {'predicate': 'by_rule'}, select=sel)],
                 provenance='derive:crop_object_rule',
             )
             if prog.verify(demos):

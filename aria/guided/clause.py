@@ -76,6 +76,23 @@ class Predicate:
     pred: Pred
     param: Any = None
 
+    def to_dict(self) -> dict:
+        d: dict = {'pred': self.pred.name}
+        if self.param is not None:
+            if isinstance(self.param, Predicate):
+                d['param'] = self.param.to_dict()
+            else:
+                d['param'] = self.param
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'Predicate':
+        pred = Pred[d['pred']]
+        param = d.get('param')
+        if isinstance(param, dict) and 'pred' in param:
+            param = cls.from_dict(param)
+        return cls(pred=pred, param=param)
+
     def test(self, obj: ObjFact, all_objs: list[ObjFact], pairs: list = None) -> bool:
         if self.pred == Pred.IS_SMALLEST:
             return obj.size == min(o.size for o in all_objs)

@@ -45,10 +45,14 @@ class StepSelect:
         if self.params:
             serializable = {}
             for k, v in self.params.items():
-                # Skip non-serializable Predicate objects
                 if isinstance(v, list) and v and hasattr(v[0], 'pred'):
-                    continue
-                serializable[str(k)] = v
+                    # Serialize Predicate objects
+                    serializable[str(k)] = [p.to_dict() for p in v]
+                elif hasattr(v, 'to_dict'):
+                    # Serialize nested objects (e.g. StepSelect)
+                    serializable[str(k)] = v.to_dict()
+                else:
+                    serializable[str(k)] = v
             if serializable:
                 d['params'] = serializable
         if self.from_step is not None:
@@ -57,7 +61,22 @@ class StepSelect:
 
     @classmethod
     def from_dict(cls, d: dict) -> StepSelect:
-        return cls(role=d['role'], params=d.get('params', {}),
+        params = dict(d.get('params', {}))
+        # Deserialize predicates
+        if 'predicates' in params and isinstance(params['predicates'], list):
+            from aria.guided.clause import Predicate
+            deserialized = []
+            for p in params['predicates']:
+                if isinstance(p, dict) and 'pred' in p:
+                    deserialized.append(Predicate.from_dict(p))
+                else:
+                    deserialized.append(p)
+            if deserialized:
+                params['predicates'] = deserialized
+        # Deserialize nested selector
+        if 'selector' in params and isinstance(params['selector'], dict):
+            params['selector'] = cls.from_dict(params['selector'])
+        return cls(role=d['role'], params=params,
                    from_step=d.get('from_step'))
 
     def to_predicates(self):
@@ -242,7 +261,7 @@ class SearchProgram:
             elif step.action == 'crop_nonbg':
                 result = _exec_crop_nonbg(result)
             elif step.action == 'crop_object':
-                result = _exec_crop_object(result, step.params or {})
+                result = _exec_crop_object(result, step.params or {}, step.select)
             elif step.action == 'crop_fixed':
                 p = step.params or {}
                 result = result[p['r0']:p['r0']+p['h'], p['c0']:p['c0']+p['w']]
@@ -574,11 +593,21 @@ def _exec_crop_nonbg(grid):
     return grid[r0:r1+1, c0:c1+1]
 
 
-def _exec_crop_object(grid, params):
-    """Crop grid to bounding box of an object matching a predicate."""
+def _exec_crop_object(grid, params, select=None):
+    """Crop grid to bounding box of an object matching a predicate or selector."""
     from aria.guided.perceive import perceive
     from aria.guided.dsl import prim_select
     from aria.guided.clause import Predicate, Pred
+
+    # Rule-based selector path (from step.select)
+    if select is not None and params.get('predicate') == 'by_rule':
+        facts = perceive(grid)
+        selected = select.select_objects(facts)
+        if len(selected) == 1:
+            obj = selected[0]
+            return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
+        return grid
+
     pred_name = params.get('predicate', 'largest')
     _name_to_pred = {
         'largest': Pred.IS_LARGEST, 'smallest': Pred.IS_SMALLEST,
@@ -603,14 +632,6 @@ def _exec_crop_object(grid, params):
                 return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
             except (ValueError, IndexError):
                 pass
-        # Try rule-based selector (from selection_facts)
-        sel = params.get('selector')
-        if sel is not None:
-            facts = perceive(grid)
-            selected = sel.select_objects(facts)
-            if len(selected) == 1:
-                obj = selected[0]
-                return grid[obj.row:obj.row+obj.height, obj.col:obj.col+obj.width]
         return grid
     facts = perceive(grid)
     selected = prim_select(facts, [Predicate(pred)])

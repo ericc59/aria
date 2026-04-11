@@ -105,18 +105,24 @@ class MacroLibrary:
                 'macros': [m.to_dict() for m in self.macros],
             }, f, indent=2)
 
-    def score_signature(self, action_sig: str) -> float:
-        """Score an action signature by macro frequency and solve rate.
+    def score_candidate(self, action_sig: str, provenance: str = '') -> float:
+        """Score a candidate by matching macro provenance + action signature.
 
+        Prefers exact provenance match (uses the miner's grouping key),
+        falls back to action-signature-only match at half weight.
         Returns 0.0 if no matching macro exists.
-        Used as a conservative ranking signal in candidate_rank.
         """
         best = 0.0
         for m in self.macros:
-            if m.action_signature == action_sig:
-                # Weight: frequency * solve_rate (higher = more reliable)
-                score = m.frequency * m.solve_rate
+            if m.action_signature != action_sig:
+                continue
+            score = m.frequency * m.solve_rate
+            # Exact provenance match gets full weight
+            if provenance and provenance in m.source_provenances:
                 best = max(best, score)
+            else:
+                # Action-only match at half weight (less specific)
+                best = max(best, score * 0.5)
         return best
 
     @classmethod

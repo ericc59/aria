@@ -86,7 +86,7 @@ def score_search_program(
     )
     prior_score = prior.score_family(prog.signature, task_signatures)
     model_score = model.score_family(prog.signature, task_signatures) if model is not None else 0.0
-    macro_score = macro_library.score_signature(prog.signature) if macro_library is not None else 0.0
+    macro_score = macro_library.score_candidate(prog.signature, prog.provenance) if macro_library is not None else 0.0
     return SearchCandidateScore(
         demos_passed=demos_passed,
         dims_correct=dims_correct,
