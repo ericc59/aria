@@ -149,6 +149,21 @@ def _match_cost(out_obj, in_obj):
         if xform:
             return 4.0
 
+    # Near-shape match: same color, similar size, bbox overlap or containment.
+    # Catches objects that grew/shrank slightly during movement.
+    if same_color and in_obj.size >= 2 and out_obj.size >= 2:
+        size_ratio = min(in_obj.size, out_obj.size) / max(in_obj.size, out_obj.size)
+        if size_ratio >= 0.5:
+            iou = _masks_overlap_iou(in_obj, out_obj)
+            if iou > 0.3:
+                return 5.0 + (1.0 - iou) * 5  # 5.0-8.5 range
+            # No overlap but same color + similar size → candidate move
+            pos_dist = abs(in_obj.center_row - out_obj.center_row) + \
+                       abs(in_obj.center_col - out_obj.center_col)
+            if pos_dist < max(in_obj.height + out_obj.height,
+                              in_obj.width + out_obj.width) * 2:
+                return 15.0 + pos_dist * 0.5
+
     # Modified (same color, overlapping)
     if same_color:
         iou = _masks_overlap_iou(in_obj, out_obj)
@@ -183,6 +198,13 @@ def _classify_match(out_obj, in_obj):
         xform = _is_transform_of(in_obj.mask, out_obj.mask)
         if xform:
             return "transformed", xform
+
+    # Near-shape movement: same color, similar size, not same position.
+    # Object may have grown/shrunk slightly during placement.
+    if same_color and not same_pos and in_obj.size >= 2 and out_obj.size >= 2:
+        size_ratio = min(in_obj.size, out_obj.size) / max(in_obj.size, out_obj.size)
+        if size_ratio >= 0.5:
+            return "moved", None
 
     if same_color:
         iou = _masks_overlap_iou(in_obj, out_obj)
