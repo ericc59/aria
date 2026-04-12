@@ -413,9 +413,59 @@ def _exec_grid_fill_between(inp, step):
     if grid_info is None:
         return inp
 
-    mode = (step.params or {}).get('mode', 'color')
+    params = step.params or {}
+    mode = params.get('mode', 'color')
+    fill_all = bool(params.get('fill_all', False))
     bg = facts.bg
     result = inp.copy()
+
+    if fill_all:
+        keys = []
+        contents = []
+        for r in range(grid_info.n_rows):
+            for c in range(grid_info.n_cols):
+                cell = grid_info.cell_at(r, c)
+                if cell and cell_has_content(inp, cell, bg):
+                    content = cell_content(inp, cell, bg)
+                    if mode == 'pattern':
+                        key = (content.shape, content.tobytes())
+                    else:
+                        color = cell_content_color(inp, cell, bg)
+                        if color is None:
+                            continue
+                        key = ('color', int(color))
+                    keys.append(key)
+                    contents.append(content)
+
+        if not keys:
+            return result
+
+        from collections import Counter
+        key, _ = Counter(keys).most_common(1)[0]
+        template = None
+        if mode == 'pattern':
+            for content in contents:
+                if (content.shape, content.tobytes()) == key:
+                    template = content
+                    break
+        else:
+            template = key[1]
+
+        for r in range(grid_info.n_rows):
+            for c in range(grid_info.n_cols):
+                cell = grid_info.cell_at(r, c)
+                if cell and not cell_has_content(inp, cell, bg):
+                    if mode == 'pattern' and template is not None:
+                        h, w = cell.height, cell.width
+                        sh, sw = template.shape
+                        if sh > h or sw > w:
+                            continue
+                        result[cell.r0:cell.r0 + sh,
+                               cell.c0:cell.c0 + sw] = template
+                    elif mode == 'color':
+                        result[cell.r0:cell.r0 + cell.height,
+                               cell.c0:cell.c0 + cell.width] = int(template)
+        return result
 
     for axis in ('row', 'col'):
         n_lines = grid_info.n_rows if axis == 'row' else grid_info.n_cols

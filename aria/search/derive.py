@@ -1583,6 +1583,78 @@ def _derive_grid_broadcast(all_facts, demos):
             if prog.verify(demos):
                 return [prog]
 
+    def _build_fill_all(inp, facts, grid_info, mode):
+        bg = facts.bg
+        result = inp.copy()
+        keys = []
+        contents = []
+        for r in range(grid_info.n_rows):
+            for c in range(grid_info.n_cols):
+                cell = grid_info.cell_at(r, c)
+                if cell and cell_has_content(inp, cell, bg):
+                    content = cell_content(inp, cell, bg)
+                    if mode == 'pattern':
+                        key = (content.shape, content.tobytes())
+                    else:
+                        color = cell_content_color(inp, cell, bg)
+                        if color is None:
+                            continue
+                        key = ('color', int(color))
+                    keys.append(key)
+                    contents.append(content)
+
+        if not keys:
+            return result
+
+        from collections import Counter
+        key, _ = Counter(keys).most_common(1)[0]
+        template = None
+        if mode == 'pattern':
+            for content in contents:
+                if (content.shape, content.tobytes()) == key:
+                    template = content
+                    break
+        else:
+            template = key[1]
+
+        for r in range(grid_info.n_rows):
+            for c in range(grid_info.n_cols):
+                cell = grid_info.cell_at(r, c)
+                if cell and not cell_has_content(inp, cell, bg):
+                    if mode == 'pattern' and template is not None:
+                        h, w = cell.height, cell.width
+                        sh, sw = template.shape
+                        if sh > h or sw > w:
+                            continue
+                        result[cell.r0:cell.r0 + sh,
+                               cell.c0:cell.c0 + sw] = template
+                    elif mode == 'color':
+                        result[cell.r0:cell.r0 + cell.height,
+                               cell.c0:cell.c0 + cell.width] = int(template)
+
+        return result
+
+    for mode in ('color', 'pattern'):
+        all_ok = True
+        for di, (inp, out) in enumerate(demos):
+            facts = all_facts[di]
+            grid_info = detect_grid(facts)
+            if grid_info is None:
+                all_ok = False
+                break
+            result = _build_fill_all(inp, facts, grid_info, mode)
+            if not np.array_equal(result, out):
+                all_ok = False
+                break
+
+        if all_ok:
+            prog = SearchProgram(
+                steps=[SearchStep('grid_fill_between', {'mode': mode, 'fill_all': True})],
+                provenance=f'derive:grid_fill_all_{mode}',
+            )
+            if prog.verify(demos):
+                return [prog]
+
     return []
 
 

@@ -135,6 +135,40 @@ def test_grid_fill_between_pattern():
     assert np.array_equal(dst, src)
 
 
+def test_grid_fill_all_pattern():
+    """grid_fill_between with fill_all should fill all empty cells."""
+    from aria.search.sketch import SearchProgram, SearchStep
+
+    grid = np.zeros((8, 8), dtype=np.int8)
+    grid[2, :] = 5
+    grid[5, :] = 5
+    grid[:, 2] = 5
+    grid[:, 5] = 5
+    grid[0, 0] = 3
+    grid[1, 1] = 4
+
+    prog = SearchProgram(
+        steps=[SearchStep('grid_fill_between', {'mode': 'pattern', 'fill_all': True})],
+        provenance='test',
+    )
+    result = prog.execute(grid)
+
+    facts = perceive(result)
+    g = detect_grid(facts)
+    assert g is not None
+    cell_src = g.cell_at(0, 0)
+    assert cell_src is not None
+    src = result[cell_src.r0:cell_src.r0 + cell_src.height,
+                 cell_src.c0:cell_src.c0 + cell_src.width]
+    for r in range(g.n_rows):
+        for c in range(g.n_cols):
+            cell = g.cell_at(r, c)
+            assert cell is not None
+            dst = result[cell.r0:cell.r0 + cell.height,
+                         cell.c0:cell.c0 + cell.width]
+            assert np.array_equal(dst, src)
+
+
 def test_06df4c85_solves():
     """Task 06df4c85 must solve via grid_fill_between."""
     from aria.datasets import get_dataset, load_arc_task
