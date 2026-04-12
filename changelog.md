@@ -1,5 +1,7 @@
 ## 2026-04-12
 
+- added `ParamExpr` to `aria/search/sketch.py`: tiny per-object expression language (const/field/rank/mod/count/lookup) evaluated at execution time; serializable via to_dict/from_dict
+- added `eval_param_expr` to `aria/search/executor.py`: evaluates ParamExpr against an object and scene facts with rank/count/lookup support
 - added `aria/search/task_analysis.py`: `TaskAnalysis` dataclass with dims_change, diff_type (recolor_only/additive/subtractive/rearrange/mixed), extraction/construction detection, separator/panel flags; `analyze_task()` runs once per task
 - added `aria/search/output_dims.py`: `DimHypothesis` and `solve_output_dims()` predicting output shapes (constant/scale_up/scale_down/object_bbox/panel_size); integrated at start of `search_programs`
 - added `correspondence_transfer` strategy: correspondence-driven object placement for swap patterns; supports position swaps within same-shape groups (Hungarian assignment) and explicit color permutations (mapping stored in params) verified across demos

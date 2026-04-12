@@ -31,6 +31,63 @@ def _select_targets(sel, facts):
     return list(facts.objects)
 
 
+def eval_param_expr(expr, obj, facts, context=None):
+    """Evaluate a ParamExpr against a specific object and scene.
+
+    Args:
+        expr: ParamExpr or literal value (int/str passed through)
+        obj: ObjFact being processed
+        facts: GridFacts for the scene
+        context: optional dict with 'selected_objects' list for rank computation
+    Returns:
+        int value
+    """
+    from aria.search.sketch import ParamExpr
+    if not isinstance(expr, ParamExpr):
+        return int(expr) if isinstance(expr, (int, float)) else expr
+
+    op = expr.op
+    args = expr.args
+
+    if op == 'const':
+        return int(args[0])
+
+    if op == 'field':
+        name = args[0]
+        return getattr(obj, name, 0)
+
+    if op == 'rank':
+        field_name = args[0] if args else 'size'
+        selected = (context or {}).get('selected_objects', facts.objects)
+        vals = sorted([getattr(o, field_name, 0) for o in selected], reverse=True)
+        my_val = getattr(obj, field_name, 0)
+        # 1-based rank (ties get same rank)
+        for i, v in enumerate(vals):
+            if v == my_val:
+                return i + 1
+        return len(vals)
+
+    if op == 'mod':
+        field_name = args[0] if len(args) > 0 else 'size'
+        k = int(args[1]) if len(args) > 1 else 2
+        return getattr(obj, field_name, 0) % k
+
+    if op == 'count':
+        pred_name = args[0] if args else 'all'
+        if pred_name == 'all':
+            return len(facts.objects)
+        # Use simple attribute check
+        return sum(1 for o in facts.objects if getattr(o, pred_name, False))
+
+    if op == 'lookup':
+        field_name = args[0] if len(args) > 0 else 'color'
+        table = args[1] if len(args) > 1 else {}
+        key = getattr(obj, field_name, 0)
+        return table.get(key, table.get(str(key), key))
+
+    return 0
+
+
 def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
     """Execute an AST node against an input grid.
 

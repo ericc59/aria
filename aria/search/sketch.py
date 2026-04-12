@@ -19,6 +19,45 @@ from aria.search.ast import ASTNode, Op
 
 
 # ---------------------------------------------------------------------------
+# Param expressions (per-object parameterization)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class ParamExpr:
+    """A tiny expression for per-object parameters.
+
+    Evaluated at execution time against a specific object and scene facts.
+    Keeps derive output declarative — no code synthesis needed.
+
+    Ops:
+      const(v)          → literal value v
+      field(name)       → object attribute (color, size, row, col, height, width)
+      rank(field)       → 1-based rank among selected objects by field (desc)
+      mod(field, k)     → obj.field % k
+      count(pred_name)  → count of objects matching a named predicate
+      lookup(field, table) → table[obj.field], where table is {int: int}
+    """
+    op: str
+    args: tuple = ()
+
+    def to_dict(self) -> dict:
+        d: dict = {'op': self.op}
+        if self.args:
+            serializable = []
+            for a in self.args:
+                if isinstance(a, dict):
+                    serializable.append({str(k): v for k, v in a.items()})
+                else:
+                    serializable.append(a)
+            d['args'] = serializable
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ParamExpr:
+        return cls(op=d['op'], args=tuple(d.get('args', ())))
+
+
+# ---------------------------------------------------------------------------
 # Typed selection
 # ---------------------------------------------------------------------------
 
