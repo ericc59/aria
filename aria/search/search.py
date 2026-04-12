@@ -144,6 +144,17 @@ def _search_programs_inner(demos, time_budget, _deadline, _expired):
     if _expired():
         return None
 
+    # Phase 0f2: Goal-directed planner (multi-step with goal improvement)
+    from aria.search.planner import plan_search
+    planned = plan_search(demos, analysis)
+    if planned is not None and planned.verify(demos):
+        ast = planned.to_ast()
+        desc = f"search: {planned.provenance} [{planned.signature}]"
+        return ASTProgram(ast, desc, search_program=planned)
+
+    if _expired():
+        return None
+
     # Phase 0g: Dims-change pre-filter — re-derive with shape constraint
     if analysis.dims_change and dim_hypotheses:
         from aria.search.derive import derive_programs as _derive_retry

@@ -1,5 +1,6 @@
 ## 2026-04-12
 
+- added `aria/search/planner.py`: goal-directed multi-step planner with GoalState tracking (target_shape, diff_type, changed_pixel_fraction, removed_colors); reducers gated by TaskAnalysis and only accepted if they improve the goal; integrated after decomposer in search pipeline
 - refined decomposer splitters: pruned `apply_color_map` (redundant with remove_color), pruned `rot90`/`rot270` (change dims under same_dims gate), reduced panel indices 4→3; added `crop_object_unique_color` (crops to bbox of the single unique-color object)
 - added `_derive_rank_recolor_expr`: single-step rank→color recolor via `ParamExpr('lookup', ('_rank_by_size', table))`; replaces N per-group recolor steps with one lookup expression
 - added `_derive_field_move_expr`: per-color variable-offset move via `ParamExpr('lookup', ('color', dr_table/dc_table))`; derives color→offset tables from demos
