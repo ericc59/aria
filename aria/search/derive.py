@@ -169,6 +169,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_grid_cell_pack(all_facts, demos)
         results.extend(progs)
 
+    # Strategy 2j: Grid-slot transfer (modules placed into empty grid cells)
+    if not results:
+        progs = _derive_grid_slot_transfer(all_facts, demos)
+        results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -1750,6 +1755,88 @@ def _derive_grid_cell_pack(all_facts, demos):
             if prog.verify(demos):
                 return [prog]
 
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2j: Grid-slot transfer
+# ---------------------------------------------------------------------------
+
+def _derive_grid_slot_transfer(all_facts, demos):
+    """Move modules into empty grid cells by shape/mask compatibility.
+
+    Detects a grid (separator or implicit), identifies source cells
+    with content and target cells that are empty in the input but
+    filled in the output. Matches each source to a target using
+    mask compatibility and Hungarian assignment.
+    """
+    from aria.search.grid_detect import (
+        detect_grid, cell_content, cell_has_content,
+    )
+    from scipy.optimize import linear_sum_assignment
+
+    # All demos must have a grid
+    grids = []
+    for di, (inp, out) in enumerate(demos):
+        facts = all_facts[di]
+        g = detect_grid(facts)
+        if g is None:
+            return []
+        grids.append(g)
+
+    # Verify the pattern in each demo
+    for di, (inp, out) in enumerate(demos):
+        facts = all_facts[di]
+        bg = facts.bg
+        g = grids[di]
+
+        # Source cells: have content in input, empty in output
+        sources = []
+        # Target cells: empty in input, have content in output
+        targets = []
+        # Unchanged cells: same in input and output
+        for cell in g.cells:
+            inp_content = cell_has_content(inp, cell, bg)
+            out_content = cell_has_content(out, cell, bg)
+            if inp_content and not out_content:
+                sources.append(cell)
+            elif not inp_content and out_content:
+                targets.append(cell)
+
+        if not sources or not targets:
+            return []
+        if len(sources) != len(targets):
+            return []
+
+        # Match sources to targets by content compatibility
+        src_masks = [cell_content(inp, c, bg) for c in sources]
+        tgt_masks = [cell_content(out, c, bg) for c in targets]
+
+        n = len(sources)
+        cost = np.full((n, n), 1e6, dtype=float)
+        for si in range(n):
+            for ti in range(n):
+                sm = src_masks[si]
+                tm = tgt_masks[ti]
+                if sm.shape == tm.shape and np.array_equal(sm, tm):
+                    # Exact content match
+                    cost[si, ti] = 0.0
+                elif sm.shape == tm.shape:
+                    # Same shape, check similarity
+                    diff = int(np.sum(sm != tm))
+                    cost[si, ti] = float(diff)
+
+        rows, cols = linear_sum_assignment(cost)
+        if any(cost[r, c] >= 1e6 for r, c in zip(rows, cols)):
+            return []
+
+    # Pattern holds. Emit grid_slot_transfer step.
+    prog = SearchProgram(
+        steps=[SearchStep('grid_slot_transfer', {})],
+        provenance='derive:grid_slot_transfer',
+    )
+    if prog.verify(demos):
+        return [prog]
     return []
 
 

@@ -240,6 +240,8 @@ class SearchProgram:
                 result = _exec_registration_transfer(result, step)
             elif step.action == 'grid_fill_between':
                 result = _exec_grid_fill_between(result, step)
+            elif step.action == 'grid_slot_transfer':
+                result = _exec_grid_slot_transfer(result, step)
             elif step.action == 'grid_cell_pack':
                 result = _exec_grid_cell_pack(result, step)
             elif step.action == 'registration_anchor_transfer':
@@ -591,6 +593,80 @@ def _exec_grid_cell_pack(inp, step):
     return result
 
 
+def _exec_grid_slot_transfer(inp, step):
+    """Move cell contents from source slots to empty target slots in a grid.
+
+    Uses the same matching rule as the derive path: exact content match
+    via Hungarian assignment.
+    """
+    from aria.guided.perceive import perceive
+    from aria.search.grid_detect import detect_grid, cell_content, cell_has_content
+    from scipy.optimize import linear_sum_assignment
+
+    facts = perceive(inp)
+    bg = facts.bg
+    g = detect_grid(facts)
+    if g is None:
+        return inp
+
+    result = inp.copy()
+
+    # Identify source cells (non-empty) and potential target cells (empty)
+    sources = []
+    targets = []
+    for cell in g.cells:
+        if cell_has_content(inp, cell, bg):
+            sources.append(cell)
+        else:
+            targets.append(cell)
+
+    if not sources or not targets or len(sources) > len(targets):
+        return inp
+
+    # Match sources to targets: try to place each source content somewhere
+    # For grid_slot_transfer, we move sources to targets and clear the source.
+    # The matching uses content similarity (exact match preferred).
+    src_contents = [cell_content(inp, c, bg) for c in sources]
+
+    n_src = len(sources)
+    n_tgt = len(targets)
+    cost = np.full((n_src, n_tgt), 1e6, dtype=float)
+
+    for si in range(n_src):
+        for ti in range(n_tgt):
+            sc = src_contents[si]
+            # Target cell dimensions
+            tc = targets[ti]
+            if sc.shape[0] == tc.height and sc.shape[1] == tc.width:
+                # Same dimensions — use L1 distance as tiebreaker
+                dist = abs(sources[si].r0 - tc.r0) + abs(sources[si].c0 - tc.c0)
+                cost[si, ti] = dist
+
+    rows, cols = linear_sum_assignment(cost)
+
+    for si, ti in zip(rows, cols):
+        if cost[si, ti] >= 1e6:
+            continue
+        src_cell = sources[si]
+        tgt_cell = targets[ti]
+        content = src_contents[si]
+
+        # Clear source
+        for r in range(src_cell.height):
+            for c in range(src_cell.width):
+                result[src_cell.r0 + r, src_cell.c0 + c] = bg
+
+        # Place at target
+        h = min(src_cell.height, tgt_cell.height)
+        w = min(src_cell.width, tgt_cell.width)
+        for r in range(h):
+            for c in range(w):
+                if content[r, c] != bg:
+                    result[tgt_cell.r0 + r, tgt_cell.c0 + c] = content[r, c]
+
+    return result
+
+
 def _exec_registration_transfer(inp, step):
     """Move modules into frame openings based on shape fit.
 
@@ -930,7 +1006,8 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
         return ASTNode(Op.RECOLOR_MAP, [ASTNode(Op.INPUT)], param=p.get('color_map', {}))
 
     if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil',
-                  'registration_transfer', 'grid_fill_between'):
+                  'registration_transfer', 'grid_fill_between',
+                  'grid_slot_transfer'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 
