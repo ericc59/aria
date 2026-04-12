@@ -1,5 +1,8 @@
 ## 2026-04-12
 
+- added `neighbor_count` ParamExpr op: counts 4-connected non-bg neighbors per object; `rank` now supports `order` arg ('asc'/'desc') and works with any field (row/col/height/width)
+- added `_derive_recolor_by_neighbor_count`: maps neighbor_count → color via lookup table with proper selector for changed objects
+- extended `_derive_rank_recolor_expr` to try ranking by row/col/height/width (not just size); generalized `_rank_by_*` virtual field in eval_param_expr
 - added `aria/search/planner.py`: goal-directed multi-step planner with GoalState tracking (target_shape, diff_type, changed_pixel_fraction, removed_colors); reducers gated by TaskAnalysis and only accepted if they improve the goal; integrated after decomposer in search pipeline
 - refined decomposer splitters: pruned `apply_color_map` (redundant with remove_color), pruned `rot90`/`rot270` (change dims under same_dims gate), reduced panel indices 4→3; added `crop_object_unique_color` (crops to bbox of the single unique-color object)
 - added `_derive_rank_recolor_expr`: single-step rank→color recolor via `ParamExpr('lookup', ('_rank_by_size', table))`; replaces N per-group recolor steps with one lookup expression

@@ -148,6 +148,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]], *, deadline: flo
         progs = _derive_field_move_expr(all_transitions, all_facts, demos)
         results.extend(progs)
 
+    # Strategy 1e: Recolor by neighbor count via ParamExpr
+    if not results:
+        progs = _derive_recolor_by_neighbor_count(all_transitions, all_facts, demos)
+        results.extend(progs)
+
     # Strategy 2: Multi-group dispatch (different groups → different actions)
     if not _expired():
         progs = _derive_dispatch(all_transitions, all_facts, demos)
@@ -1252,13 +1257,11 @@ def _derive_rank_recolor(all_transitions, all_facts, demos):
 def _derive_rank_recolor_expr(all_transitions, all_facts, demos):
     """Recolor all objects using a ParamExpr rank→color lookup table.
 
-    Instead of N separate recolor steps (one per group), emits a single
-    recolor step with ParamExpr('lookup', ('rank_by_size', table)) where
-    table maps rank → color. More compact and generalizes to unseen ranks.
+    Tries ranking by size, row, col, height, width (descending).
+    Emits a single recolor step with a lookup expression.
     """
     from aria.search.sketch import ParamExpr
 
-    # Check: all changed objects are recolored
     for trans in all_transitions:
         changed = [t for t in trans if t.match_type != 'identical' and t.in_obj]
         if not changed:
@@ -1266,39 +1269,48 @@ def _derive_rank_recolor_expr(all_transitions, all_facts, demos):
         if not all(t.match_type == 'recolored' for t in changed):
             return []
 
-    # Build rank→color table from demo 0
     trans0 = all_transitions[0]
     recolored = [t for t in trans0 if t.match_type == 'recolored' and t.in_obj]
     if len(recolored) < 2:
         return []
 
-    # Sort by size descending → assign rank 1,2,...
-    sorted_objs = sorted(recolored, key=lambda t: -t.in_obj.size)
+    for rank_field in ('size', 'row', 'col', 'height', 'width'):
+        rank_table = _try_rank_table(all_transitions, rank_field)
+        if rank_table is None:
+            continue
+        virtual_field = f'_rank_by_{rank_field}'
+        color_expr = ParamExpr('lookup', (virtual_field, rank_table))
+        sel = StepSelect('all')
+        prog = SearchProgram(
+            steps=[SearchStep('recolor', {'color': color_expr}, sel)],
+            provenance=f'derive:rank_recolor_expr_{rank_field}',
+        )
+        if prog.verify(demos):
+            return [prog]
+
+    return []
+
+
+def _try_rank_table(all_transitions, field_name):
+    """Try to build a consistent rank→color table from all transitions."""
+    trans0 = all_transitions[0]
+    recolored = [t for t in trans0 if t.match_type == 'recolored' and t.in_obj]
+    sorted_objs = sorted(recolored, key=lambda t: -getattr(t.in_obj, field_name, 0))
     rank_table = {}
     for rank_idx, t in enumerate(sorted_objs):
         rank = rank_idx + 1
         if rank in rank_table and rank_table[rank] != t.color_to:
-            return []  # inconsistent
+            return None
         rank_table[rank] = t.color_to
 
-    # Verify table holds across all demos
     for trans in all_transitions[1:]:
         recolored = [t for t in trans if t.match_type == 'recolored' and t.in_obj]
-        sorted_objs = sorted(recolored, key=lambda t: -t.in_obj.size)
+        sorted_objs = sorted(recolored, key=lambda t: -getattr(t.in_obj, field_name, 0))
         for rank_idx, t in enumerate(sorted_objs):
             rank = rank_idx + 1
             if rank_table.get(rank) != t.color_to:
-                return []
-
-    color_expr = ParamExpr('lookup', ('_rank_by_size', rank_table))
-    sel = StepSelect('all')
-    prog = SearchProgram(
-        steps=[SearchStep('recolor', {'color': color_expr}, sel)],
-        provenance='derive:rank_recolor_expr',
-    )
-    if prog.verify(demos):
-        return [prog]
-    return []
+                return None
+    return rank_table
 
 
 def _derive_field_move_expr(all_transitions, all_facts, demos):
@@ -1389,6 +1401,92 @@ def _derive_field_move_expr(all_transitions, all_facts, demos):
     if prog.verify(demos):
         return [prog]
     return []
+
+
+def _derive_recolor_by_neighbor_count(all_transitions, all_facts, demos):
+    """Recolor objects where output color depends on neighbor count.
+
+    For each recolored object, counts its 4-connected non-bg neighbors.
+    If neighbor_count → color mapping is consistent across all demos, emits
+    a ParamExpr('lookup', ('_neighbor_count_any', table)) recolor.
+    """
+    from aria.search.sketch import ParamExpr
+
+    for trans in all_transitions:
+        changed = [t for t in trans if t.match_type != 'identical' and t.in_obj]
+        if not changed:
+            return []
+        if not all(t.match_type == 'recolored' for t in changed):
+            return []
+
+    # Build neighbor_count → color table from demo 0
+    inp0, out0 = demos[0]
+    trans0 = all_transitions[0]
+    facts0 = all_facts[0]
+    bg0 = facts0.bg
+
+    nc_table = {}
+    for t in trans0:
+        if t.match_type != 'recolored' or not t.in_obj:
+            continue
+        nc = _count_obj_neighbors(t.in_obj, inp0, bg0)
+        if nc in nc_table and nc_table[nc] != t.color_to:
+            return []
+        nc_table[nc] = t.color_to
+
+    if len(nc_table) < 2:
+        return []
+
+    # Verify across all demos
+    for di in range(1, len(demos)):
+        inp_d, _ = demos[di]
+        facts_d = all_facts[di]
+        bg_d = facts_d.bg
+        for t in all_transitions[di]:
+            if t.match_type != 'recolored' or not t.in_obj:
+                continue
+            nc = _count_obj_neighbors(t.in_obj, inp_d, bg_d)
+            if nc_table.get(nc) != t.color_to:
+                return []
+
+    # Find a selector for the recolored objects (excluding unchanged ones)
+    target_oids_per_demo = []
+    for di, trans in enumerate(all_transitions):
+        oids = {t.in_obj.oid for t in trans
+                if t.match_type == 'recolored' and t.in_obj}
+        target_oids_per_demo.append(oids)
+
+    sel = _find_selector_for_oid_sets(target_oids_per_demo, all_facts)
+    if sel is None:
+        sel = StepSelect('all')
+
+    color_expr = ParamExpr('lookup', ('_neighbor_count_any', nc_table))
+    prog = SearchProgram(
+        steps=[SearchStep('recolor', {'color': color_expr}, sel)],
+        provenance='derive:recolor_by_neighbor_count',
+    )
+    if prog.verify(demos):
+        return [prog]
+    return []
+
+
+def _count_obj_neighbors(obj, grid, bg):
+    """Count 4-connected non-bg neighbors of an object's pixels."""
+    h, w = grid.shape
+    count = 0
+    for r in range(obj.row, obj.row + obj.height):
+        for c in range(obj.col, obj.col + obj.width):
+            if not obj.mask[r - obj.row, c - obj.col]:
+                continue
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and int(grid[nr, nc]) != bg:
+                    # Don't count own pixels
+                    if not (obj.row <= nr < obj.row + obj.height and
+                            obj.col <= nc < obj.col + obj.width and
+                            obj.mask[nr - obj.row, nc - obj.col]):
+                        count += 1
+    return count
 
 
 # ---------------------------------------------------------------------------
@@ -2783,8 +2881,12 @@ def _find_selector_for_oid_sets(target_oids_per_demo, all_facts):
     if all(all_labels):
         return StepSelect('all')
 
-    # Structural features (fast)
+    # Structural features — try size-2 first (fast), then size-3
+    # Include dynamic area_gte_N features from rows
     candidate_fields = list(STRUCTURAL_FEATURES)
+    dynamic_feats = sorted({f for row in all_rows for f in row
+                            if f.startswith('area_gte_') and f not in STRUCTURAL_FEATURES})
+    candidate_fields.extend(dynamic_feats)
     for row in all_rows:
         for f in candidate_fields:
             if f not in row:
@@ -2793,13 +2895,13 @@ def _find_selector_for_oid_sets(target_oids_per_demo, all_facts):
     rule = induce_boolean_dnf(
         all_rows, all_labels,
         candidate_fields=candidate_fields,
-        max_clause_size=3,
+        max_clause_size=2,
         max_clauses=1,
     )
     if rule is not None:
         return StepSelect('by_rule', {'rule': rule.to_dict()})
 
-    # Extended with color features
+    # Extended with color features at size-2
     all_features: set[str] = set()
     for row in all_rows:
         all_features.update(row.keys())
@@ -2818,6 +2920,17 @@ def _find_selector_for_oid_sets(target_oids_per_demo, all_facts):
     )
     if rule is not None:
         return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    # Structural size-3 (guard: skip for scenes with many objects to stay fast)
+    if len(all_rows) <= 20:
+        rule = induce_boolean_dnf(
+            all_rows, all_labels,
+            candidate_fields=candidate_fields,
+            max_clause_size=3,
+            max_clauses=1,
+        )
+        if rule is not None:
+            return StepSelect('by_rule', {'rule': rule.to_dict()})
 
     return None
 
@@ -3278,6 +3391,9 @@ def _find_selector_cross_demo(match_type, all_transitions, all_facts):
     # Structural features only first (fast); add per-color only if needed
     from aria.search.selection_facts import STRUCTURAL_FEATURES
     candidate_fields = list(STRUCTURAL_FEATURES)
+    dynamic_feats = sorted({f for row in all_rows for f in row
+                            if f.startswith('area_gte_') and f not in STRUCTURAL_FEATURES})
+    candidate_fields.extend(dynamic_feats)
 
     # Fill missing with False
     for row in all_rows:
@@ -3285,17 +3401,17 @@ def _find_selector_cross_demo(match_type, all_transitions, all_facts):
             if f not in row:
                 row[f] = False
 
-    # Try structural-only conjunction (fast: ~30 features)
+    # Try structural size-2 first (fast with enriched vocabulary)
     rule = induce_boolean_dnf(
         all_rows, all_labels,
         candidate_fields=candidate_fields,
-        max_clause_size=3,
+        max_clause_size=2,
         max_clauses=1,
     )
     if rule is not None:
         return StepSelect('by_rule', {'rule': rule.to_dict()})
 
-    # Add per-color features and try again with size-2 conjunctions
+    # Extended with color features at size-2
     all_features: set[str] = set()
     for row in all_rows:
         all_features.update(row.keys())
@@ -3312,10 +3428,21 @@ def _find_selector_cross_demo(match_type, all_transitions, all_facts):
         max_clause_size=2,
         max_clauses=1,
     )
-    if rule is None:
-        return None
+    if rule is not None:
+        return StepSelect('by_rule', {'rule': rule.to_dict()})
 
-    return StepSelect('by_rule', {'rule': rule.to_dict()})
+    # Structural size-3 fallback (guarded for small scenes)
+    if len(all_rows) <= 20:
+        rule = induce_boolean_dnf(
+            all_rows, all_labels,
+            candidate_fields=candidate_fields,
+            max_clause_size=3,
+            max_clauses=1,
+        )
+        if rule is not None:
+            return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    return None
 
 
 def _find_selector(oids, facts):
@@ -3405,8 +3532,11 @@ def _induce_selector_rule(target_set, facts):
     if not any(labels) or all(labels):
         return None
 
-    # Structural features only (bounded, fast)
+    # Structural size-2 first (fast with enriched vocabulary)
     candidate_fields = list(STRUCTURAL_FEATURES)
+    dynamic_feats = sorted({f for row in fact_rows for f in row
+                            if f.startswith('area_gte_') and f not in STRUCTURAL_FEATURES})
+    candidate_fields.extend(dynamic_feats)
     for row in fact_rows:
         for f in candidate_fields:
             if f not in row:
@@ -3415,13 +3545,13 @@ def _induce_selector_rule(target_set, facts):
     rule = induce_boolean_dnf(
         fact_rows, labels,
         candidate_fields=candidate_fields,
-        max_clause_size=3,
+        max_clause_size=2,
         max_clauses=1,
     )
     if rule is not None:
         return StepSelect('by_rule', {'rule': rule.to_dict()})
 
-    # Add per-color features, try size-2 conjunctions
+    # Extended with color features at size-2
     all_features: set[str] = set()
     for row in fact_rows:
         all_features.update(row.keys())
@@ -3438,10 +3568,21 @@ def _induce_selector_rule(target_set, facts):
         max_clause_size=2,
         max_clauses=1,
     )
-    if rule is None:
-        return None
+    if rule is not None:
+        return StepSelect('by_rule', {'rule': rule.to_dict()})
 
-    return StepSelect('by_rule', {'rule': rule.to_dict()})
+    # Structural size-3 fallback (guarded for small scenes)
+    if len(fact_rows) <= 15:
+        rule = induce_boolean_dnf(
+            fact_rows, labels,
+            candidate_fields=candidate_fields,
+            max_clause_size=3,
+            max_clauses=1,
+        )
+        if rule is not None:
+            return StepSelect('by_rule', {'rule': rule.to_dict()})
+
+    return None
 
 
 # ---------------------------------------------------------------------------

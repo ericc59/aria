@@ -58,14 +58,37 @@ def eval_param_expr(expr, obj, facts, context=None):
 
     if op == 'rank':
         field_name = args[0] if args else 'size'
+        order = args[1] if len(args) > 1 else 'desc'
         selected = (context or {}).get('selected_objects', facts.objects)
-        vals = sorted([getattr(o, field_name, 0) for o in selected], reverse=True)
+        reverse = (order == 'desc')
+        vals = sorted([getattr(o, field_name, 0) for o in selected], reverse=reverse)
         my_val = getattr(obj, field_name, 0)
-        # 1-based rank (ties get same rank)
         for i, v in enumerate(vals):
             if v == my_val:
                 return i + 1
         return len(vals)
+
+    if op == 'neighbor_count':
+        # Count 4-connected neighbors matching a color or 'any' (non-bg)
+        target = args[0] if args else 'any'
+        grid = (context or {}).get('grid')
+        if grid is None:
+            return 0
+        h, w = grid.shape
+        count = 0
+        for r in range(obj.row, obj.row + obj.height):
+            for c in range(obj.col, obj.col + obj.width):
+                if not obj.mask[r - obj.row, c - obj.col]:
+                    continue
+                for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        nval = int(grid[nr, nc])
+                        if target == 'any' and nval != facts.bg:
+                            count += 1
+                        elif isinstance(target, int) and nval == target:
+                            count += 1
+        return count
 
     if op == 'mod':
         field_name = args[0] if len(args) > 0 else 'size'
@@ -82,17 +105,25 @@ def eval_param_expr(expr, obj, facts, context=None):
     if op == 'lookup':
         field_name = args[0] if len(args) > 0 else 'color'
         table = args[1] if len(args) > 1 else {}
-        # Special: _rank_by_size → compute rank then look up
-        if field_name == '_rank_by_size':
+        # Special: _rank_by_<field> → compute rank then look up
+        if field_name.startswith('_rank_by_'):
+            rank_attr = field_name[len('_rank_by_'):]
             selected = (context or {}).get('selected_objects', facts.objects)
-            vals = sorted([o.size for o in selected], reverse=True)
-            my_val = obj.size
+            vals = sorted([getattr(o, rank_attr, 0) for o in selected], reverse=True)
+            my_val = getattr(obj, rank_attr, 0)
             for i, v in enumerate(vals):
                 if v == my_val:
                     key = i + 1
                     break
             else:
                 key = len(vals)
+        elif field_name == '_neighbor_count_any':
+            grid = (context or {}).get('grid')
+            if grid is not None:
+                from aria.search.derive import _count_obj_neighbors
+                key = _count_obj_neighbors(obj, grid, facts.bg)
+            else:
+                key = 0
         else:
             key = getattr(obj, field_name, 0)
         return table.get(key, table.get(str(key), key))
@@ -434,7 +465,7 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         sel_preds, sdr, sdc = node.param
         facts = perceive(grid)
         targets = _select_targets(sel_preds, facts)
-        context = {'selected_objects': targets}
+        context = {'selected_objects': targets, 'grid': grid}
         result = grid.copy()
         for obj in targets:
             obj_dr = _resolve_param(sdr, obj, facts, context)
@@ -482,7 +513,7 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         sel_preds, fill_color = node.param
         facts = perceive(grid)
         targets = _select_targets(sel_preds, facts)
-        context = {'selected_objects': targets}
+        context = {'selected_objects': targets, 'grid': grid}
         result = grid.copy()
         for obj in targets:
             fc = _resolve_param(fill_color, obj, facts, context)
@@ -767,7 +798,7 @@ def _exec_recolor(node, inp, ctx):
     sel_preds, new_color = node.param
     targets = _select_targets(sel_preds, facts)
     result = grid.copy()
-    context = {'selected_objects': targets}
+    context = {'selected_objects': targets, 'grid': grid}
     for obj in targets:
         c = _resolve_param(new_color, obj, facts, context)
         for r in range(obj.height):
@@ -844,7 +875,7 @@ def _exec_move(node, inp, ctx):
     result = grid.copy()
     rows, cols = grid.shape
     targets = _select_targets(sel_preds, facts)
-    context = {'selected_objects': targets}
+    context = {'selected_objects': targets, 'grid': grid}
     for obj in targets:
         for r in range(obj.height):
             for c in range(obj.width):
