@@ -25,6 +25,7 @@ def test_macro_round_trip():
         solve_rate=1.0,
         action_signature='recolor -> recolor -> recolor -> recolor',
         selector_pattern='largest -> rule -> rule -> smallest',
+        param_schema=[{'name': 'color0', 'kind': 'color', 'path': ['steps', 0, 'params', 'color']}],
     )
 
     d = macro.to_dict()
@@ -34,6 +35,7 @@ def test_macro_round_trip():
     assert restored.frequency == 3
     assert restored.action_signature == macro.action_signature
     assert restored.source_task_count == 3
+    assert restored.param_schema == macro.param_schema
 
 
 def test_macro_json_round_trip():

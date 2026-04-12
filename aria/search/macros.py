@@ -35,6 +35,7 @@ class Macro:
 
     # Structure: the composition as a SearchProgram dict
     program_template: dict = field(default_factory=dict)
+    param_schema: list[dict[str, Any]] = field(default_factory=list)
 
     # Provenance: how this was discovered
     source_provenances: list[str] = field(default_factory=list)
@@ -54,6 +55,7 @@ class Macro:
             'name': self.name,
             'description': self.description,
             'program_template': self.program_template,
+            'param_schema': self.param_schema,
             'source_provenances': self.source_provenances,
             'source_task_count': self.source_task_count,
             'frequency': self.frequency,
@@ -68,6 +70,7 @@ class Macro:
             name=d.get('name', ''),
             description=d.get('description', ''),
             program_template=d.get('program_template', {}),
+            param_schema=d.get('param_schema', []),
             source_provenances=d.get('source_provenances', []),
             source_task_count=d.get('source_task_count', 0),
             frequency=d.get('frequency', 0),

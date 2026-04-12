@@ -181,3 +181,24 @@ def test_macro_library_end_to_end():
     assert len(loaded.macros) == 1
     assert loaded.macros[0].frequency == 4
     assert loaded.macros[0].name == lib.macros[0].name
+
+
+def test_macro_parameterization():
+    """Macro templates should be parameterized, not literal."""
+    trace = SolveTrace(
+        task_id='t1',
+        task_signatures=('dims:same',),
+        provenance='derive:uniform_recolor_const',
+        step_actions=('recolor',),
+        step_selectors=('',),
+        program_dict={'steps': [{'action': 'recolor', 'params': {'color': 5}}]},
+        n_demos=3,
+        n_steps=1,
+        test_correct=True,
+    )
+    lib = mine_macros([trace, trace], min_frequency=2)
+    assert len(lib.macros) == 1
+    macro = lib.macros[0]
+    params = macro.program_template['steps'][0]['params']
+    assert params['color'].startswith('$')
+    assert macro.param_schema
