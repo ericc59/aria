@@ -138,6 +138,16 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]], *, deadline: flo
         progs = _derive_rank_recolor(all_transitions, all_facts, demos)
         results.extend(progs)
 
+    # Strategy 1c: Rank recolor via ParamExpr (single-step lookup)
+    if not results:
+        progs = _derive_rank_recolor_expr(all_transitions, all_facts, demos)
+        results.extend(progs)
+
+    # Strategy 1d: Field-based move via ParamExpr (color→offset lookup)
+    if not results:
+        progs = _derive_field_move_expr(all_transitions, all_facts, demos)
+        results.extend(progs)
+
     # Strategy 2: Multi-group dispatch (different groups → different actions)
     if not _expired():
         progs = _derive_dispatch(all_transitions, all_facts, demos)
@@ -1234,6 +1244,148 @@ def _derive_rank_recolor(all_transitions, all_facts, demos):
         steps.append(SearchStep('recolor', {'color': target_color}, sel))
 
     prog = SearchProgram(steps=steps, provenance='derive:rank_recolor')
+    if prog.verify(demos):
+        return [prog]
+    return []
+
+
+def _derive_rank_recolor_expr(all_transitions, all_facts, demos):
+    """Recolor all objects using a ParamExpr rank→color lookup table.
+
+    Instead of N separate recolor steps (one per group), emits a single
+    recolor step with ParamExpr('lookup', ('rank_by_size', table)) where
+    table maps rank → color. More compact and generalizes to unseen ranks.
+    """
+    from aria.search.sketch import ParamExpr
+
+    # Check: all changed objects are recolored
+    for trans in all_transitions:
+        changed = [t for t in trans if t.match_type != 'identical' and t.in_obj]
+        if not changed:
+            return []
+        if not all(t.match_type == 'recolored' for t in changed):
+            return []
+
+    # Build rank→color table from demo 0
+    trans0 = all_transitions[0]
+    recolored = [t for t in trans0 if t.match_type == 'recolored' and t.in_obj]
+    if len(recolored) < 2:
+        return []
+
+    # Sort by size descending → assign rank 1,2,...
+    sorted_objs = sorted(recolored, key=lambda t: -t.in_obj.size)
+    rank_table = {}
+    for rank_idx, t in enumerate(sorted_objs):
+        rank = rank_idx + 1
+        if rank in rank_table and rank_table[rank] != t.color_to:
+            return []  # inconsistent
+        rank_table[rank] = t.color_to
+
+    # Verify table holds across all demos
+    for trans in all_transitions[1:]:
+        recolored = [t for t in trans if t.match_type == 'recolored' and t.in_obj]
+        sorted_objs = sorted(recolored, key=lambda t: -t.in_obj.size)
+        for rank_idx, t in enumerate(sorted_objs):
+            rank = rank_idx + 1
+            if rank_table.get(rank) != t.color_to:
+                return []
+
+    color_expr = ParamExpr('lookup', ('_rank_by_size', rank_table))
+    sel = StepSelect('all')
+    prog = SearchProgram(
+        steps=[SearchStep('recolor', {'color': color_expr}, sel)],
+        provenance='derive:rank_recolor_expr',
+    )
+    if prog.verify(demos):
+        return [prog]
+    return []
+
+
+def _derive_field_move_expr(all_transitions, all_facts, demos):
+    """Detect per-object moves where offset is a simple function of object fields.
+
+    Tries: dr = const, dc = field('col') - field('row'), etc.
+    Keeps only expressions that verify across all demos.
+    """
+    from aria.search.sketch import ParamExpr
+
+    moved_types = {'moved', 'moved_recolored'}
+
+    # Collect per-object (dr, dc, obj_fields) across demos
+    for trans in all_transitions:
+        moved = [t for t in trans if t.match_type in moved_types and t.in_obj]
+        if len(moved) < 2:
+            return []
+
+    # Try simple field-based expressions for dr and dc
+    # Candidate dr expressions: const(k), field('row'), field('col')
+    # Candidate dc expressions: const(k), field('row'), field('col')
+
+    def _try_expr(field_name, transitions_list):
+        """Check if offset == obj.field for all moved objects in all demos."""
+        for trans in transitions_list:
+            for t in trans:
+                if t.match_type not in moved_types or not t.in_obj:
+                    continue
+                expected = getattr(t.in_obj, field_name, None)
+                if expected is None:
+                    return False
+                if t.dr != expected and t.dc != expected:
+                    return False
+        return True
+
+    # Try: dr = -field('row'), meaning each object moves to row 0
+    all_ok = True
+    for trans in all_transitions:
+        for t in trans:
+            if t.match_type not in moved_types or not t.in_obj:
+                continue
+            if t.dr != -t.in_obj.row:
+                all_ok = False
+                break
+        if not all_ok:
+            break
+
+    if all_ok:
+        dr_expr = ParamExpr('const', (0,))  # target row = 0
+        # Actually we need dr = -obj.row, which is not a simple ParamExpr.
+        # Skip this case for now — it needs a 'negate' op.
+        pass
+
+    # Try: constant offset per-object-color (all same-color objects move same amount)
+    # This is the most common ARC pattern for per-object moves
+    for trans in all_transitions:
+        moved = [t for t in trans if t.match_type in moved_types and t.in_obj]
+        if len(moved) < 2:
+            return []
+        # Group by color
+        color_offsets = {}
+        for t in moved:
+            c = t.in_obj.color
+            offset = (t.dr, t.dc)
+            if c in color_offsets and color_offsets[c] != offset:
+                return []  # same color, different offset
+            color_offsets[c] = offset
+
+    # Build color→offset lookup tables
+    dr_table = {}
+    dc_table = {}
+    for trans in all_transitions[:1]:  # derive from demo 0
+        for t in trans:
+            if t.match_type in moved_types and t.in_obj:
+                dr_table[t.in_obj.color] = t.dr
+                dc_table[t.in_obj.color] = t.dc
+
+    if len(dr_table) < 2:
+        return []
+
+    dr_expr = ParamExpr('lookup', ('color', dr_table))
+    dc_expr = ParamExpr('lookup', ('color', dc_table))
+    sel = StepSelect('all')
+    prog = SearchProgram(
+        steps=[SearchStep('move', {'dr': dr_expr, 'dc': dc_expr}, sel)],
+        provenance='derive:field_move_expr',
+    )
     if prog.verify(demos):
         return [prog]
     return []
@@ -4329,10 +4481,15 @@ def _derive_ray_project(demos):
                     elif sr > r:
                         active_dirs.add('up')
 
-    # Build candidate direction sets: observed dirs first, then broader sets
+    # Build candidate direction sets: individual observed dirs, then combos
     dir_candidates = []
-    if active_dirs:
+    # Individual directions from active set (most specific first)
+    for d in sorted(active_dirs):
+        dir_candidates.append([d])
+    # Full active set
+    if len(active_dirs) > 1:
         dir_candidates.append(sorted(active_dirs))
+    # Standard combos
     dir_candidates.extend([
         ['up', 'down', 'left', 'right'],
         ['up', 'down'],

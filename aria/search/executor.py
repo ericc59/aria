@@ -82,7 +82,19 @@ def eval_param_expr(expr, obj, facts, context=None):
     if op == 'lookup':
         field_name = args[0] if len(args) > 0 else 'color'
         table = args[1] if len(args) > 1 else {}
-        key = getattr(obj, field_name, 0)
+        # Special: _rank_by_size → compute rank then look up
+        if field_name == '_rank_by_size':
+            selected = (context or {}).get('selected_objects', facts.objects)
+            vals = sorted([o.size for o in selected], reverse=True)
+            my_val = obj.size
+            for i, v in enumerate(vals):
+                if v == my_val:
+                    key = i + 1
+                    break
+            else:
+                key = len(vals)
+        else:
+            key = getattr(obj, field_name, 0)
         return table.get(key, table.get(str(key), key))
 
     return 0
