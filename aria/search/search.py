@@ -93,6 +93,14 @@ def search_programs(
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc, search_program=prog)
 
+    # Phase 0f: Decomposition search (analysis-gated splitter + sub-derive)
+    from aria.search.decompose import search_decomposed
+    decomp = search_decomposed(demos, analysis)
+    if decomp is not None:
+        ast = decomp.to_ast()
+        desc = f"search: {decomp.provenance} [{decomp.signature}]"
+        return ASTProgram(ast, desc, search_program=decomp)
+
     registry = proposal_prior.rank_schemas(build_seed_registry(), task_signatures)
 
     # Phase 1: single-step schemas

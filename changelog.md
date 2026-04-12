@@ -1,5 +1,6 @@
 ## 2026-04-12
 
+- added `aria/search/decompose.py`: analysis-gated decomposition search with splitter + sub-derive composition; splitters: crop_non_bg_bbox, remove_color_c, extract_panel_0; max depth 3, recursive; integrated after Phase 0e in search_programs
 - added `ParamExpr` to `aria/search/sketch.py`: tiny per-object expression language (const/field/rank/mod/count/lookup) evaluated at execution time; serializable via to_dict/from_dict
 - added `eval_param_expr` to `aria/search/executor.py`: evaluates ParamExpr against an object and scene facts with rank/count/lookup support
 - added `aria/search/task_analysis.py`: `TaskAnalysis` dataclass with dims_change, diff_type (recolor_only/additive/subtractive/rearrange/mixed), extraction/construction detection, separator/panel flags; `analyze_task()` runs once per task
