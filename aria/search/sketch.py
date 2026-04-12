@@ -404,12 +404,12 @@ def _exec_grid_fill_between(inp, step):
     """Fill empty grid cells between repeated content along rows and columns."""
     from aria.guided.perceive import perceive
     from aria.search.grid_detect import (
-        detect_separator_grid, cell_content, cell_has_content,
+        detect_grid, cell_content, cell_has_content,
         cell_content_color,
     )
 
     facts = perceive(inp)
-    grid_info = detect_separator_grid(facts)
+    grid_info = detect_grid(facts)
     if grid_info is None:
         return inp
 

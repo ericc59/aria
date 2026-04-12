@@ -58,7 +58,7 @@
 - added synthetic regression for anchor-based registration transfer
 - generalized anchor registration transfer to multiple modules using nearest-anchor assignment, with shared derive/exec movement logic
 - added `module_anchor_centroid` helper to support assignment
-- added separator-grid detection (`grid_detect.py`) and `grid_fill_between` strategy: fills empty grid cells between same-color blocks or identical cell patterns along rows/cols; `06df4c85` now solves via derive
+- added separator/implicit grid detection (`grid_detect.py`) and `grid_fill_between` strategy: fills empty grid cells between same-color blocks or identical cell patterns along rows/cols; implicit grids are inferred from repeated object lattices; `06df4c85` now solves via derive
 - consolidation refresh: v1-train 45/400 (up from 34), v2-eval 11/120; 11 new v1-train solves including `228f6490` (registration_transfer), plus cumulative crop/stencil/recolor gains
 
 ## 2026-04-09

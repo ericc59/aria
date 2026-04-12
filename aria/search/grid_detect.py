@@ -1,8 +1,9 @@
-"""Grid structure detection for separator-defined cell grids.
+"""Grid structure detection for cell grids.
 
-Detects regular grids from separator positions and enumerates
-the cells with their positions. NOT an execution layer — used
-at derive time to expose grid structure to search strategies.
+Detects regular grids from separator positions or implicit
+object lattices and enumerates the cells with their positions.
+NOT an execution layer — used at derive time to expose grid
+structure to search strategies.
 """
 
 from __future__ import annotations
@@ -132,6 +133,86 @@ def detect_separator_grid(facts: GridFacts) -> DetectedGrid | None:
         sep_color=sep_color,
         cells=tuple(cells),
     )
+
+
+def _gcd_list(values: list[int]) -> int:
+    if not values:
+        return 0
+    from math import gcd
+    g = values[0]
+    for v in values[1:]:
+        g = gcd(g, v)
+    return g
+
+
+def detect_implicit_grid(facts: GridFacts, *, min_objects: int = 4) -> DetectedGrid | None:
+    """Detect a regular grid implied by repeated object placement.
+
+    Uses the most common object (height, width) as the cell template,
+    then infers row/col steps from top-left coordinates.
+    """
+    if not facts.objects:
+        return None
+
+    size_groups: dict[tuple[int, int], list] = {}
+    for obj in facts.objects:
+        size_groups.setdefault((obj.height, obj.width), []).append(obj)
+
+    (cell_h, cell_w), group = max(size_groups.items(), key=lambda kv: len(kv[1]))
+    if len(group) < min_objects:
+        return None
+
+    rows = sorted({obj.row for obj in group})
+    cols = sorted({obj.col for obj in group})
+    if len(rows) < 2 or len(cols) < 2:
+        return None
+
+    row_diffs = [b - a for a, b in zip(rows, rows[1:]) if b - a > 0]
+    col_diffs = [b - a for a, b in zip(cols, cols[1:]) if b - a > 0]
+    row_step = _gcd_list(row_diffs)
+    col_step = _gcd_list(col_diffs)
+    if row_step <= 0 or col_step <= 0:
+        return None
+
+    # Build grid positions from min to max by step
+    row0 = rows[0]
+    col0 = cols[0]
+    row_positions = list(range(row0, rows[-1] + 1, row_step))
+    col_positions = list(range(col0, cols[-1] + 1, col_step))
+    if not row_positions or not col_positions:
+        return None
+
+    # Ensure all objects align to grid positions
+    row_set = set(row_positions)
+    col_set = set(col_positions)
+    for obj in group:
+        if obj.row not in row_set or obj.col not in col_set:
+            return None
+
+    cells = []
+    for gi, r0 in enumerate(row_positions):
+        for gj, c0 in enumerate(col_positions):
+            cells.append(GridCell(
+                grid_row=gi, grid_col=gj,
+                r0=r0, c0=c0, height=row_step, width=col_step,
+            ))
+
+    return DetectedGrid(
+        n_rows=len(row_positions),
+        n_cols=len(col_positions),
+        cell_height=row_step,
+        cell_width=col_step,
+        sep_color=facts.bg,
+        cells=tuple(cells),
+    )
+
+
+def detect_grid(facts: GridFacts) -> DetectedGrid | None:
+    """Detect a grid via separators first, then implicit object lattice."""
+    grid = detect_separator_grid(facts)
+    if grid is not None:
+        return grid
+    return detect_implicit_grid(facts)
 
 
 def cell_content(grid: np.ndarray, cell: GridCell, bg: int) -> np.ndarray:

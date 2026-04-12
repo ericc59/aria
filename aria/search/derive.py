@@ -1500,14 +1500,14 @@ def _derive_grid_broadcast(all_facts, demos):
     are filled with that content in the output.
     """
     from aria.search.grid_detect import (
-        detect_separator_grid, cell_content, cell_has_content,
+        detect_grid, cell_content, cell_has_content,
         cell_content_color,
     )
 
     # All demos must have a separator grid
     for di, (inp, out) in enumerate(demos):
         facts = all_facts[di]
-        grid_info = detect_separator_grid(facts)
+        grid_info = detect_grid(facts)
         if grid_info is None:
             return []
 
@@ -1566,7 +1566,7 @@ def _derive_grid_broadcast(all_facts, demos):
         all_ok = True
         for di, (inp, out) in enumerate(demos):
             facts = all_facts[di]
-            grid_info = detect_separator_grid(facts)
+            grid_info = detect_grid(facts)
             if grid_info is None:
                 all_ok = False
                 break

@@ -7,6 +7,7 @@ import numpy as np
 from aria.guided.perceive import perceive
 from aria.search.grid_detect import (
     detect_separator_grid,
+    detect_grid,
     cell_content,
     cell_has_content,
     cell_content_color,
@@ -51,6 +52,25 @@ def test_cell_content_detection():
     assert not cell_has_content(grid, cell_01, bg=0)
     assert cell_content_color(grid, cell_00, bg=0) == 3
     assert cell_content_color(grid, cell_01, bg=0) is None
+
+
+def test_detect_implicit_grid():
+    """Detect an implicit grid from repeated object placements."""
+    grid = np.zeros((5, 5), dtype=np.int8)
+    grid[0, 0] = 3
+    grid[0, 2] = 3
+    grid[2, 0] = 3
+    grid[2, 2] = 3
+
+    facts = perceive(grid)
+    g = detect_grid(facts)
+
+    assert g is not None
+    assert g.n_rows == 2
+    assert g.n_cols == 2
+    cell = g.cell_at(1, 1)
+    assert cell is not None
+    assert (cell.r0, cell.c0) == (2, 2)
 
 
 def test_grid_fill_between_execution():
