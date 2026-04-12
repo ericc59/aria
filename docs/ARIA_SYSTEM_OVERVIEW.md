@@ -84,6 +84,15 @@ Example serialized program (shape only):
 }
 ```
 
+Lowering rules:
+- Most steps lower to a single AST op with encoded params.
+- Some steps remain “search‑level” and execute via `SearchProgram.execute()` (e.g., registration transfer).
+- `StepSelect` is lowered to selector predicates for object‑level AST ops.
+
+Constraints:
+- All programs must be demo‑verifiable.
+- Search‑level steps must be deterministic and pure (no hidden state).
+
 ### 4.2 Selector DSL
 
 Selectors are explicit and composable:
@@ -121,6 +130,61 @@ Parameter types (typical):
 For the exhaustive list, see:
 - `aria/search/ast.py` (op enum and node structure)
 - `aria/search/executor.py` (implementation for each op)
+
+#### 4.3.1 Op Catalog (grouped)
+
+Leaves and constants:
+- `INPUT`, `CONST_COLOR`, `CONST_INT`
+
+Perception and selection:
+- `PERCEIVE`, `SELECT`, `SELECT_IDX`
+
+Extraction and region handling:
+- `CROP_BBOX`, `CROP_INTERIOR`, `SPLIT`, `FIRST`, `SECOND`
+
+Region ops:
+- `COMBINE` (and/or/xor/diff/rdiff), `RENDER`
+
+Geometric transforms:
+- `FLIP_H`, `FLIP_V`, `FLIP_HV`, `ROT90`, `ROT180`, `TRANSPOSE`
+
+Trace/geometry:
+- `TRACE` (ray/trace spec)
+
+Grid constructors and patterning:
+- `TILE`, `PERIODIC_EXTEND`, `REPAIR_FRAMES`, `TEMPLATE_BROADCAST`
+
+Panel operations:
+- `PANEL_ODD_SELECT`, `PANEL_MAJORITY_SELECT`, `PANEL_REPAIR`, `PANEL_BOOLEAN`
+
+Repair:
+- `SYMMETRY_REPAIR`
+
+Structured output / packing:
+- `OBJECT_REPACK`, `FRAME_BBOX_PACK`
+
+Region decode / domain helpers:
+- `QUADRANT_TEMPLATE_DECODE`, `CROSS_STENCIL_RECOLOR`, `LEGEND_FRAME_FILL`
+
+Object‑level actions:
+- `RECOLOR`, `REMOVE`, `MOVE`, `GRAVITY`, `SLIDE`, `STAMP`
+- `TRANSFORM_OBJ`, `FILL_INTERIOR`, `FILL_ENCLOSED`
+
+Composition:
+- `COMPOSE`, `FOR_EACH`, `IF_ELSE`
+
+Mirror:
+- `MIRROR`
+
+Hole (partial programs):
+- `HOLE`
+
+Compatibility / noncanonical ops (kept for replay/macro use, typically quarantined from default derive):
+- `ANOMALY_HALO`, `OBJECT_HIGHLIGHT`, `LEGEND_CHAIN_CONNECT`
+- `DIAGONAL_COLLISION_TRACE`, `MASKED_PATCH_TRANSFER`
+- `STACKED_GLYPH_TRACE`, `CORNER_DIAG_FILL`
+- `SEPARATOR_MOTIF_BROADCAST`, `LINE_ARITH_BROADCAST`
+- `BARRIER_PORT_TRANSFER`, `CAVITY_TRANSFER`
 
 ### 4.4 Execution Semantics
 
@@ -175,6 +239,10 @@ If none verify, it falls back to:
 - Phase 2: 2‑step compositions of verified singles
 
 All candidates are ranked before verification using `aria/search/candidate_rank.py`.
+
+Verification:
+- `SearchProgram.verify(demos)` executes each step and compares to demo outputs.
+- Candidates are discarded immediately on mismatch.
 
 Seed schemas:
 - Each schema declares an action, parameter search space, and selector options.
