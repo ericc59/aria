@@ -164,6 +164,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_grid_broadcast(all_facts, demos)
         results.extend(progs)
 
+    # Strategy 2i: Grid-cell pack (pack non-empty cells into a grid order)
+    if not results:
+        progs = _derive_grid_cell_pack(all_facts, demos)
+        results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -1651,6 +1656,96 @@ def _derive_grid_broadcast(all_facts, demos):
             prog = SearchProgram(
                 steps=[SearchStep('grid_fill_between', {'mode': mode, 'fill_all': True})],
                 provenance=f'derive:grid_fill_all_{mode}',
+            )
+            if prog.verify(demos):
+                return [prog]
+
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2i: Grid-cell pack
+# ---------------------------------------------------------------------------
+
+def _derive_grid_cell_pack(all_facts, demos):
+    """Pack non-empty grid cells into a fixed order (row/col/color)."""
+    from aria.search.grid_detect import (
+        detect_grid, cell_content, cell_has_content,
+    )
+
+    orderings = ('row', 'col', 'color')
+
+    for ordering in orderings:
+        all_ok = True
+        for di, (inp, out) in enumerate(demos):
+            facts = all_facts[di]
+            grid_info = detect_grid(facts)
+            if grid_info is None:
+                all_ok = False
+                break
+
+            items = []
+            for r in range(grid_info.n_rows):
+                for c in range(grid_info.n_cols):
+                    cell = grid_info.cell_at(r, c)
+                    if cell and cell_has_content(inp, cell, facts.bg):
+                        items.append({
+                            'row': r,
+                            'col': c,
+                            'content': cell_content(inp, cell, facts.bg),
+                        })
+
+            if ordering == 'col':
+                items.sort(key=lambda x: (x['col'], x['row']))
+            elif ordering == 'color':
+                def _key(it):
+                    content = it['content']
+                    flat = content.ravel()
+                    non_bg = flat[flat != facts.bg]
+                    if len(non_bg) == 0:
+                        return (999, it['row'], it['col'])
+                    from collections import Counter
+                    color = Counter(non_bg.tolist()).most_common(1)[0][0]
+                    return (int(color), it['row'], it['col'])
+                items.sort(key=_key)
+            else:
+                items.sort(key=lambda x: (x['row'], x['col']))
+
+            result = np.full_like(inp, facts.bg)
+            if facts.separators:
+                for sep in facts.separators:
+                    if sep.axis == 'row':
+                        result[sep.index, :] = sep.color
+                    else:
+                        result[:, sep.index] = sep.color
+
+            idx = 0
+            for r in range(grid_info.n_rows):
+                for c in range(grid_info.n_cols):
+                    if idx >= len(items):
+                        break
+                    cell = grid_info.cell_at(r, c)
+                    if cell is None:
+                        continue
+                    content = items[idx]['content']
+                    h, w = content.shape
+                    if h > cell.height or w > cell.width:
+                        all_ok = False
+                        break
+                    result[cell.r0:cell.r0 + h,
+                           cell.c0:cell.c0 + w] = content
+                    idx += 1
+                if not all_ok:
+                    break
+
+            if not all_ok or not np.array_equal(result, out):
+                all_ok = False
+                break
+
+        if all_ok:
+            prog = SearchProgram(
+                steps=[SearchStep('grid_cell_pack', {'ordering': ordering})],
+                provenance=f'derive:grid_cell_pack_{ordering}',
             )
             if prog.verify(demos):
                 return [prog]

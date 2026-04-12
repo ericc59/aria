@@ -169,6 +169,30 @@ def test_grid_fill_all_pattern():
             assert np.array_equal(dst, src)
 
 
+def test_grid_cell_pack_row():
+    """grid_cell_pack should pack non-empty cells row-major."""
+    from aria.search.sketch import SearchProgram, SearchStep
+
+    grid = np.zeros((8, 8), dtype=np.int8)
+    grid[2, :] = 5
+    grid[5, :] = 5
+    grid[:, 2] = 5
+    grid[:, 5] = 5
+    # two filled cells: (0,2) then (2,0) in row-major order
+    grid[0:2, 6:8] = 3
+    grid[6:8, 0:2] = 4
+
+    prog = SearchProgram(
+        steps=[SearchStep('grid_cell_pack', {'ordering': 'row'})],
+        provenance='test',
+    )
+    result = prog.execute(grid)
+
+    # After packing, first cell (0,0) should be 3, next (0,1) should be 4
+    assert result[0, 0] == 3
+    assert result[0, 3] == 4
+
+
 def test_06df4c85_solves():
     """Task 06df4c85 must solve via grid_fill_between."""
     from aria.datasets import get_dataset, load_arc_task

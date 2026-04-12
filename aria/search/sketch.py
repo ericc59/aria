@@ -240,6 +240,8 @@ class SearchProgram:
                 result = _exec_registration_transfer(result, step)
             elif step.action == 'grid_fill_between':
                 result = _exec_grid_fill_between(result, step)
+            elif step.action == 'grid_cell_pack':
+                result = _exec_grid_cell_pack(result, step)
             elif step.action == 'registration_anchor_transfer':
                 result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
@@ -511,6 +513,80 @@ def _exec_grid_fill_between(inp, step):
                             fh, fw = min(h, sh), min(w, sw)
                             result[cell.r0:cell.r0 + fh,
                                    cell.c0:cell.c0 + fw] = src[:fh, :fw]
+
+    return result
+
+
+def _exec_grid_cell_pack(inp, step):
+    """Pack non-empty grid-cell contents into the grid in a fixed order."""
+    from aria.guided.perceive import perceive
+    from aria.search.grid_detect import (
+        detect_grid, cell_content, cell_has_content,
+    )
+
+    facts = perceive(inp)
+    grid_info = detect_grid(facts)
+    if grid_info is None:
+        return inp
+
+    params = step.params or {}
+    ordering = params.get('ordering', 'row')
+    bg = facts.bg
+
+    # Collect non-empty cell contents (full cell patches)
+    items = []
+    for r in range(grid_info.n_rows):
+        for c in range(grid_info.n_cols):
+            cell = grid_info.cell_at(r, c)
+            if cell and cell_has_content(inp, cell, bg):
+                items.append({
+                    'row': r,
+                    'col': c,
+                    'content': cell_content(inp, cell, bg),
+                    'cell': cell,
+                })
+
+    if ordering == 'col':
+        items.sort(key=lambda x: (x['col'], x['row']))
+    elif ordering == 'color':
+        def _key(it):
+            content = it['content']
+            flat = content.ravel()
+            non_bg = flat[flat != bg]
+            if len(non_bg) == 0:
+                return (999, it['row'], it['col'])
+            # dominant color
+            from collections import Counter
+            color = Counter(non_bg.tolist()).most_common(1)[0][0]
+            return (int(color), it['row'], it['col'])
+        items.sort(key=_key)
+    else:
+        items.sort(key=lambda x: (x['row'], x['col']))
+
+    result = np.full_like(inp, bg)
+    # preserve separators if present
+    if facts.separators:
+        for sep in facts.separators:
+            if sep.axis == 'row':
+                result[sep.index, :] = sep.color
+            else:
+                result[:, sep.index] = sep.color
+
+    idx = 0
+    for r in range(grid_info.n_rows):
+        for c in range(grid_info.n_cols):
+            if idx >= len(items):
+                break
+            cell = grid_info.cell_at(r, c)
+            if cell is None:
+                continue
+            content = items[idx]['content']
+            h, w = content.shape
+            if h > cell.height or w > cell.width:
+                return inp
+            result[cell.r0:cell.r0 + h,
+                   cell.c0:cell.c0 + w] = content
+            idx += 1
 
     return result
 
