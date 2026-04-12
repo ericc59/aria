@@ -93,3 +93,47 @@ def test_serialization():
     assert d['op'] == 'lookup'
     restored = ParamExpr.from_dict(d)
     assert restored.op == 'lookup'
+
+
+def test_param_expr_through_recolor_ast():
+    """ParamExpr must actually evaluate when used as new_color in RECOLOR op."""
+    from aria.search.ast import ASTNode, Op
+    from aria.search.executor import execute_ast
+    from aria.guided.clause import Predicate, Pred
+
+    # Two objects: color 1 (size 1) and color 2 (size 4)
+    grid = np.zeros((4, 4), dtype=np.int8)
+    grid[0, 0] = 1       # size 1 → rank 2
+    grid[2:4, 2:4] = 2   # size 4 → rank 1
+
+    # Recolor all objects to their size-rank
+    sel = [Predicate(Pred.SIZE_GT, 0)]
+    rank_expr = ParamExpr('rank', ('size',))
+    node = ASTNode(Op.RECOLOR, [ASTNode(Op.INPUT)], param=(sel, rank_expr))
+    result = execute_ast(node, grid)
+
+    assert result is not None
+    assert int(result[0, 0]) == 2        # rank 2 (smaller)
+    assert int(result[2, 2]) == 1        # rank 1 (larger)
+    assert int(result[1, 1]) == 0        # bg unchanged
+
+
+def test_param_expr_through_move_ast():
+    """ParamExpr must evaluate as dr/dc in MOVE op."""
+    from aria.search.ast import ASTNode, Op
+    from aria.search.executor import execute_ast
+    from aria.guided.clause import Predicate, Pred
+
+    grid = np.zeros((6, 6), dtype=np.int8)
+    grid[0:2, 0:2] = 1
+
+    # Move by (field('row'), const(0)) — each object moves down by its own row
+    sel = [Predicate(Pred.SIZE_GT, 0)]
+    dr_expr = ParamExpr('const', (3,))
+    dc_expr = ParamExpr('const', (0,))
+    node = ASTNode(Op.MOVE, [ASTNode(Op.INPUT)], param=(sel, dr_expr, dc_expr))
+    result = execute_ast(node, grid)
+
+    assert result is not None
+    assert int(result[0, 0]) == 0        # source cleared
+    assert int(result[3, 0]) == 1        # moved down by 3

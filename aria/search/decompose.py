@@ -54,24 +54,22 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
     # --- Panel splitters (has_panels or has_separators) ---
 
     if analysis.has_panels or analysis.has_separators:
-        # Extract each panel by index
-        for idx in range(4):  # up to 4 panels
+        for idx in range(4):
             splitters.append(Splitter(
                 name=f'extract_panel_{idx}',
                 apply=lambda inp, i=idx: _apply_extract_panel(inp, i),
                 program=SearchProgram(
-                    steps=[SearchStep('crop_fixed', {'panel_idx': idx})],
+                    steps=[SearchStep('extract_panel', {'index': idx})],
                     provenance=f'splitter:extract_panel_{idx}',
                 ),
                 compatible=lambda a: a.has_panels or a.has_separators,
             ))
 
-        # Extract legend region (smallest panel)
         splitters.append(Splitter(
             name='extract_legend_region',
             apply=_apply_extract_legend_region,
             program=SearchProgram(
-                steps=[SearchStep('crop_fixed', {'legend': True})],
+                steps=[SearchStep('extract_panel', {'mode': 'smallest'})],
                 provenance='splitter:extract_legend_region',
             ),
             compatible=lambda a: a.has_panels or a.has_separators,
@@ -87,25 +85,25 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
             name=f'remove_color_{c}',
             apply=lambda inp, color=c: _apply_remove_color(inp, color),
             program=SearchProgram(
-                steps=[SearchStep('recolor_map', {'color_map': {c: 0}})],
+                steps=[SearchStep('remove_color', {'color': c})],
                 provenance=f'splitter:remove_color_{c}',
             ),
             compatible=lambda a: True,
         ))
 
-    # Apply consistent color map (gated: recolor_only or has new+removed colors)
-    if (analysis.diff_type == 'recolor_only' or
-            (analysis.new_colors and analysis.removed_colors)):
-        splitters.append(Splitter(
-            name='apply_color_map',
-            apply=lambda inp: _apply_derived_color_map(inp, analysis),
-            program=SearchProgram(
-                steps=[SearchStep('recolor_map', {})],
-                provenance='splitter:apply_color_map',
-            ),
-            compatible=lambda a: (a.diff_type == 'recolor_only' or
-                                  bool(a.new_colors and a.removed_colors)),
-        ))
+    # Apply consistent color map (gated: has removed_colors)
+    if analysis.removed_colors:
+        cmap = {int(c): 0 for c in analysis.removed_colors if c != 0}
+        if cmap:
+            splitters.append(Splitter(
+                name='apply_color_map',
+                apply=lambda inp, m=cmap: _apply_color_map_dict(inp, m),
+                program=SearchProgram(
+                    steps=[SearchStep('recolor_map', {'color_map': cmap})],
+                    provenance='splitter:apply_color_map',
+                ),
+                compatible=lambda a: bool(a.removed_colors),
+            ))
 
     # --- Transform splitters (same_dims + rearrange or mixed) ---
 
@@ -121,7 +119,7 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
                 name=f'apply_transform_{xform_name}',
                 apply=lambda inp, fn=xfn: fn(inp).copy(),
                 program=SearchProgram(
-                    steps=[SearchStep('transform', {'xform': xform_name})],
+                    steps=[SearchStep('grid_transform', {'xform': xform_name})],
                     provenance=f'splitter:apply_transform_{xform_name}',
                 ),
                 compatible=lambda a: a.same_dims and a.diff_type in ('rearrange', 'mixed'),
@@ -227,7 +225,8 @@ def search_decomposed(
 
 def _apply_crop_non_bg(inp):
     """Crop to bounding box of non-bg content."""
-    bg = 0
+    from aria.guided.perceive import perceive
+    bg = perceive(inp).bg
     nz = np.argwhere(inp != bg)
     if len(nz) == 0:
         return inp
@@ -237,9 +236,19 @@ def _apply_crop_non_bg(inp):
 
 
 def _apply_remove_color(inp, color):
-    """Zero out all pixels of the given color."""
+    """Replace all pixels of the given color with the background color."""
+    from aria.guided.perceive import perceive
+    bg = perceive(inp).bg
     result = inp.copy()
-    result[result == color] = 0
+    result[result == color] = bg
+    return result
+
+
+def _apply_color_map_dict(inp, cmap):
+    """Apply an explicit color mapping dict to the grid."""
+    result = inp.copy()
+    for src, tgt in cmap.items():
+        result[inp == int(src)] = int(tgt)
     return result
 
 
@@ -265,12 +274,13 @@ def _apply_extract_legend_region(inp):
 
 
 def _apply_derived_color_map(inp, analysis):
-    """Apply a simple color map: removed_colors → bg, or new_colors inference."""
+    """Apply a simple color map: removed_colors → bg."""
+    from aria.guided.perceive import perceive
+    bg = perceive(inp).bg
     result = inp.copy()
-    # Map each removed color to bg
     for c in analysis.removed_colors:
-        if c != 0:
-            result[result == c] = 0
+        if c != bg:
+            result[result == c] = bg
     return result
 
 

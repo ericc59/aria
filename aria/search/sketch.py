@@ -291,6 +291,8 @@ class SearchProgram:
                 result = _exec_panel_legend_map(result, step)
             elif step.action == 'correspondence_transfer':
                 result = _exec_correspondence_transfer(result, step)
+            elif step.action == 'extract_panel':
+                result = _exec_extract_panel(result, step)
             elif step.action == 'registration_anchor_transfer':
                 result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
@@ -302,6 +304,8 @@ class SearchProgram:
                 result = _exec_cross_stencil_recolor(result, step.params or {})
             elif step.action == 'legend_frame_fill':
                 result = _exec_legend_frame_fill(result, step)
+            elif step.action == 'enclosed_fill':
+                result = _exec_enclosed_fill(result, step.params or {})
             elif step.action == 'anomaly_halo':
                 from aria.search.executor import _exec_anomaly_halo
                 result = _exec_anomaly_halo(result, step.params or {})
@@ -317,6 +321,8 @@ class SearchProgram:
                 result = _exec_color_stencil(result, step.params or {})
             elif step.action == 'crop_nonbg':
                 result = _exec_crop_nonbg(result)
+            elif step.action == 'remove_color':
+                result = _exec_remove_color(result, step.params or {})
             elif step.action == 'crop_object':
                 result = _exec_crop_object(result, step.params or {}, step.select)
             elif step.action == 'crop_fixed':
@@ -328,6 +334,34 @@ class SearchProgram:
             elif step.action == 'scale':
                 f = (step.params or {}).get('factor', 1)
                 result = np.repeat(np.repeat(result, f, axis=0), f, axis=1)
+            elif step.action == 'grid_transform':
+                xform = (step.params or {}).get('xform', 'flip_h')
+                _GRID_XFORMS = {
+                    'flip_h': lambda g: g[:, ::-1],
+                    'flip_v': lambda g: g[::-1, :],
+                    'rot90': lambda g: np.rot90(g),
+                    'rot180': lambda g: np.rot90(g, 2),
+                    'rot270': lambda g: np.rot90(g, 3),
+                }
+                fn = _GRID_XFORMS.get(xform)
+                if fn is not None:
+                    result = fn(result).copy()
+            elif step.action == 'iterate_fixed':
+                body_step = SearchStep(
+                    action=step.params.get('body_action', ''),
+                    params=step.params.get('body_params', {}),
+                    select=step.params.get('body_select'),
+                )
+                max_steps = int(step.params.get('max_steps', 100))
+                for _ in range(max_steps):
+                    prev = result.copy()
+                    result = SearchProgram(steps=[body_step],
+                                           provenance='iterate_body').execute(result)
+                    if np.array_equal(result, prev):
+                        break
+            elif step.action == 'downscale':
+                from aria.search.executor import _exec_downscale
+                result = _exec_downscale(result, step.params or {})
             else:
                 from aria.search.executor import execute_ast
                 ast = step.to_ast()
@@ -867,6 +901,27 @@ def _exec_corr_position_swap(inp, facts, bg):
     return result
 
 
+def _exec_extract_panel(inp, step):
+    """Extract a panel region by index or mode at execution time."""
+    from aria.guided.perceive import perceive
+    facts = perceive(inp)
+    params = step.params or {}
+
+    if not facts.regions:
+        return inp
+
+    mode = params.get('mode')
+    if mode == 'smallest':
+        r = min(facts.regions, key=lambda r: (r.r1 - r.r0) * (r.c1 - r.c0))
+    else:
+        idx = params.get('index', 0)
+        if idx >= len(facts.regions):
+            return inp
+        r = facts.regions[idx]
+
+    return inp[r.r0:r.r1, r.c0:r.c1].copy()
+
+
 def _exec_object_grid_pack(inp, step):
     """Pack input objects into an output grid by ordering.
 
@@ -1318,11 +1373,25 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     if action == 'recolor_map':
         return ASTNode(Op.RECOLOR_MAP, [ASTNode(Op.INPUT)], param=p.get('color_map', {}))
 
+    if action == 'ray_project':
+        return ASTNode(Op.RAY_PROJECT, [ASTNode(Op.INPUT)], param=p)
+    if action == 'flood_fill_adjacent':
+        return ASTNode(Op.FLOOD_FILL_ADJACENT, [ASTNode(Op.INPUT)], param=p)
+    if action == 'dilate':
+        return ASTNode(Op.DILATE, [ASTNode(Op.INPUT)], param=p)
+    if action == 'erode':
+        return ASTNode(Op.ERODE, [ASTNode(Op.INPUT)], param=p)
+    if action == 'downscale':
+        return ASTNode(Op.DOWNSCALE, [ASTNode(Op.INPUT)], param=p)
+    if action == 'iterate_fixed':
+        return ASTNode(Op.ITERATE_FIXED, [ASTNode(Op.INPUT)], param=p)
+
     if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil',
                   'registration_transfer', 'grid_fill_between',
                   'grid_slot_transfer', 'grid_conditional_transfer',
                   'object_grid_pack', 'panel_legend_map',
-                  'correspondence_transfer'):
+                  'correspondence_transfer', 'extract_panel',
+                  'grid_transform', 'remove_color', 'enclosed_fill'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 
@@ -1353,6 +1422,55 @@ def _exec_crop_nonbg(grid):
     r0, c0 = nonbg.min(axis=0)
     r1, c1 = nonbg.max(axis=0)
     return grid[r0:r1+1, c0:c1+1]
+
+
+def _exec_remove_color(grid, params):
+    """Replace all pixels of a given color with the background color."""
+    from aria.guided.perceive import perceive
+    color = params.get('color', 0)
+    bg = perceive(grid).bg
+    result = grid.copy()
+    result[result == color] = bg
+    return result
+
+
+def _exec_enclosed_fill(grid, params):
+    """Fill bg cells enclosed by any non-bg boundary with a constant color.
+
+    Flood-fills bg from the grid border. Any bg cell not reached is
+    enclosed and gets the fill_color.
+    """
+    from collections import deque
+    from aria.guided.perceive import perceive
+
+    fill_color = params.get('fill_color', 4)
+    bg = perceive(grid).bg
+    h, w = grid.shape
+
+    reachable = np.zeros((h, w), dtype=bool)
+    q = deque()
+    for r in range(h):
+        for c in (0, w - 1):
+            if grid[r, c] == bg and not reachable[r, c]:
+                reachable[r, c] = True
+                q.append((r, c))
+    for c in range(w):
+        for r in (0, h - 1):
+            if grid[r, c] == bg and not reachable[r, c]:
+                reachable[r, c] = True
+                q.append((r, c))
+    while q:
+        r, c = q.popleft()
+        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and not reachable[nr, nc] and grid[nr, nc] == bg:
+                reachable[nr, nc] = True
+                q.append((nr, nc))
+
+    result = grid.copy()
+    enclosed = ~reachable & (grid == bg)
+    result[enclosed] = fill_color
+    return result
 
 
 def _exec_crop_object(grid, params, select=None):

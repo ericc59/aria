@@ -18,18 +18,29 @@ import numpy as np
 from aria.search.sketch import SearchStep, SearchProgram, StepSelect
 
 
+
 # ---------------------------------------------------------------------------
 # Main entry: derive programs from correspondence
 # ---------------------------------------------------------------------------
 
-def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchProgram]:
+def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]], *, deadline: float = 0) -> list[SearchProgram]:
     """Analyze demos via correspondence and derive candidate SearchPrograms.
 
     Returns a list of verified SearchPrograms, ordered by quality.
     Each program was derived from structural analysis, not blind enumeration.
+
+    Args:
+        deadline: monotonic time after which we should stop (0 = no limit).
     """
+    import time as _time
     from aria.guided.perceive import perceive
     from aria.guided.synthesize import compute_transitions
+
+    if deadline <= 0:
+        deadline = _time.monotonic() + 10.0  # default 10s internal budget
+
+    def _expired():
+        return _time.monotonic() > deadline
 
     # Shape-independent canonical strategies first
     progs = _derive_object_repack(demos)
@@ -43,9 +54,10 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     # Newer structural strategies (after canonical ones)
     # NOTE: mid-level benchmark-shaped strategies are quarantined from default
     # derive routing; they remain in the codebase for macro/replay use.
-    progs = _derive_frame_bbox_pack(demos)
-    if progs:
-        return progs
+    if not _expired():
+        progs = _derive_frame_bbox_pack(demos)
+        if progs:
+            return progs
 
     progs = _derive_masked_patch_transfer(demos)
     if progs:
@@ -78,8 +90,16 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    if _expired():
+        return []
+
     # Strategy: Object grid pack (repack objects into different-size output)
     progs = _derive_object_grid_pack_prescan(demos)
+    if progs:
+        return progs
+
+    # Downscale (output smaller than input by integer factor)
+    progs = _derive_downscale(demos)
     if progs:
         return progs
 
@@ -88,6 +108,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         return []
 
     # Quarantined: diagonal_collision_trace (benchmark-shaped)
+
+    # Enclosed fill (flood-fill interior bg cells)
+    progs = _derive_legend_frame_fill(demos)
+    if progs:
+        return progs
 
     # Compute transitions for all demos
     all_transitions = []
@@ -114,65 +139,92 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         results.extend(progs)
 
     # Strategy 2: Multi-group dispatch (different groups → different actions)
-    progs = _derive_dispatch(all_transitions, all_facts, demos)
-    results.extend(progs)
+    if not _expired():
+        progs = _derive_dispatch(all_transitions, all_facts, demos)
+        results.extend(progs)
 
     # Strategy 2b: Conditional dispatch (same action type, different params per predicate group)
-    progs = _derive_conditional_dispatch(all_transitions, all_facts, demos)
-    results.extend(progs)
+    if not _expired():
+        progs = _derive_conditional_dispatch(all_transitions, all_facts, demos)
+        results.extend(progs)
 
     # Strategy 2c: Action-first dispatch (group by observed action, find selectors)
-    if not results:
+    if not results and not _expired():
         progs = _derive_action_first_dispatch(all_transitions, all_facts, demos)
         results.extend(progs)
 
     # Strategy 2f: Registration transfer (modules move into frame openings)
-    if not results:
+    if not results and not _expired():
         progs = _derive_registration_transfer(all_transitions, all_facts, demos)
         results.extend(progs)
 
     # Strategy 2g: Anchor-based registration transfer (modules align to anchor sites)
-    if not results:
+    if not results and not _expired():
         progs = _derive_anchor_registration_transfer(all_facts, demos)
         results.extend(progs)
 
     # Strategy 2h: Grid-cell broadcast (content replicated within grid rows/cols)
-    if not results:
+    if not results and not _expired():
         progs = _derive_grid_broadcast(all_facts, demos)
         results.extend(progs)
 
     # Strategy 2i: Grid-cell pack (pack non-empty cells into a grid order)
-    if not results:
+    if not results and not _expired():
         progs = _derive_grid_cell_pack(all_facts, demos)
         results.extend(progs)
 
     # Strategy 2j: Grid-slot transfer (move cell contents into empty slots)
-    if not results:
+    if not results and not _expired():
         progs = _derive_grid_slot_transfer(all_facts, demos)
         results.extend(progs)
 
     # Strategy 2k: Grid-conditional transfer (fill empty cells by rule)
-    if not results:
+    if not results and not _expired():
         progs = _derive_grid_conditional_transfer(all_facts, demos)
         results.extend(progs)
 
     # Strategy 2m: Panel legend map (legend → color mapping on target panel)
-    if not results:
+    if not results and not _expired():
         progs = _derive_panel_legend_map(all_facts, demos)
         results.extend(progs)
 
     # Strategy 2n: Correspondence transfer (per-object variable placement)
-    if not results:
+    if not results and not _expired():
         progs = _derive_correspondence_transfer(all_transitions, all_facts, demos)
         results.extend(progs)
 
     # Strategy 3: Stamp/creation (new objects from input object shapes)
-    progs = _derive_stamp(all_transitions, all_facts, demos)
-    results.extend(progs)
+    if not _expired():
+        progs = _derive_stamp(all_transitions, all_facts, demos)
+        results.extend(progs)
 
     # Strategy 4: Marker stamp (small markers → learned template stamped at each)
     # Quarantined from default derive (benchmark-shaped); keep for macro/replay.
 
+    # Strategy 5: Ray project (lines extending from objects)
+    if not results and not _expired():
+        progs = _derive_ray_project(demos)
+        results.extend(progs)
+
+    # Strategy 6: Flood fill adjacent (fill bg regions touching seed color)
+    if not results and not _expired():
+        progs = _derive_flood_fill_adjacent(demos)
+        results.extend(progs)
+
+    # Strategy 7: Dilate (expand objects into background)
+    if not results and not _expired():
+        progs = _derive_dilate(demos)
+        results.extend(progs)
+
+    # Strategy 8: Erode (shrink objects by removing border pixels)
+    if not results and not _expired():
+        progs = _derive_erode(demos)
+        results.extend(progs)
+
+    # Strategy 9: Iterate to fixed point (repeat body op until stable)
+    if not results and not _expired():
+        progs = _derive_iterate_fixed(demos)
+        results.extend(progs)
 
     return results
 
@@ -3693,7 +3745,12 @@ def _derive_legend_frame_fill(demos):
     if changed.sum() == 0:
         return []
 
-    # --- Extract legend_map and wall_colors from demo 0 ---
+    # --- Try simple enclosed fill first (no legend/frame requirement) ---
+    simple = _try_simple_enclosed_fill(demos)
+    if simple:
+        return simple
+
+    # --- Try legend-based enclosed fill ---
     from aria.search.executor import _extract_enclosed_fill_params, _exec_legend_frame_fill
 
     extracted = _extract_enclosed_fill_params(inp0)
@@ -3715,6 +3772,77 @@ def _derive_legend_frame_fill(demos):
     prog = SearchProgram(
         steps=[SearchStep('legend_frame_fill', params)],
         provenance='derive:legend_enclosed_fill',
+    )
+    return [prog]
+
+
+def _try_simple_enclosed_fill(demos):
+    """Simple enclosed fill: flood-fill bg from border, fill unreachable bg with a constant color.
+
+    No frame/legend detection needed. Derives the fill color from the
+    first demo's changed pixels and verifies across all demos.
+    """
+    from collections import deque
+    from aria.guided.perceive import perceive
+
+    if any(inp.shape != out.shape for inp, out in demos):
+        return []
+
+    def _flood_reachable(grid, bg):
+        h, w = grid.shape
+        reachable = np.zeros((h, w), dtype=bool)
+        q = deque()
+        for r in range(h):
+            for c in (0, w - 1):
+                if grid[r, c] == bg and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        for c in range(w):
+            for r in (0, h - 1):
+                if grid[r, c] == bg and not reachable[r, c]:
+                    reachable[r, c] = True
+                    q.append((r, c))
+        while q:
+            r, c = q.popleft()
+            for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w and not reachable[nr, nc] and grid[nr, nc] == bg:
+                    reachable[nr, nc] = True
+                    q.append((nr, nc))
+        return reachable
+
+    # Derive fill color from demo 0
+    inp0, out0 = demos[0]
+    diff = (inp0 != out0)
+    if diff.sum() == 0:
+        return []
+
+    fill_colors = set(int(out0[r, c]) for r, c in zip(*np.where(diff)))
+    if len(fill_colors) != 1:
+        return []
+    fill_color = next(iter(fill_colors))
+
+    # Verify: all changed pixels were bg in input
+    bg0 = perceive(inp0).bg
+    if not all(inp0[r, c] == bg0 for r, c in zip(*np.where(diff))):
+        return []
+
+    # Verify across all demos
+    for inp, out in demos:
+        facts = perceive(inp)
+        bg = facts.bg
+        reachable = _flood_reachable(inp, bg)
+        enclosed = ~reachable & (inp == bg)
+
+        expected = inp.copy()
+        expected[enclosed] = fill_color
+        if not np.array_equal(expected, out):
+            return []
+
+    params = {'fill_color': fill_color}
+    prog = SearchProgram(
+        steps=[SearchStep('enclosed_fill', params)],
+        provenance='derive:enclosed_fill',
     )
     return [prog]
 
@@ -4136,3 +4264,517 @@ def _get_support_color(facts, role):
         return None
     objs = prim_select(facts, preds)
     return objs[0].color if objs else None
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Ray project
+# ---------------------------------------------------------------------------
+
+def _derive_ray_project(demos):
+    """Derive ray_project programs from input/output correspondence.
+
+    Checks if diff pixels lie on cardinal rays from existing non-bg pixels.
+    """
+    from aria.guided.perceive import perceive
+
+    # Precondition: same-shape, diff pixels exist, and added pixels are
+    # collinear (same row or col) with at least one non-bg source pixel.
+    inp0, out0 = demos[0]
+    if inp0.shape != out0.shape:
+        return []
+    diff_mask = (inp0 != out0)
+    if not diff_mask.any():
+        return []
+
+    facts = perceive(inp0)
+    bg = facts.bg
+
+    # Added pixels = were bg in input, non-bg in output
+    added = [(r, c) for r, c in zip(*np.where(diff_mask))
+             if int(inp0[r, c]) == bg and int(out0[r, c]) != bg]
+    if not added:
+        return []
+
+    # Quick structural check: every added pixel must share a row or column
+    # with at least one non-bg source pixel in the input
+    source_rows = set()
+    source_cols = set()
+    h, w = inp0.shape
+    for r in range(h):
+        for c in range(w):
+            if int(inp0[r, c]) != bg:
+                source_rows.add(r)
+                source_cols.add(c)
+
+    collinear = all(r in source_rows or c in source_cols for r, c in added)
+    if not collinear:
+        return []
+
+    # Determine active directions from the diff
+    active_dirs = set()
+    for r, c in added:
+        if r in source_rows:
+            # Check if source is left or right
+            for sc in range(w):
+                if int(inp0[r, sc]) != bg:
+                    if sc < c:
+                        active_dirs.add('right')
+                    elif sc > c:
+                        active_dirs.add('left')
+        if c in source_cols:
+            for sr in range(h):
+                if int(inp0[sr, c]) != bg:
+                    if sr < r:
+                        active_dirs.add('down')
+                    elif sr > r:
+                        active_dirs.add('up')
+
+    # Build candidate direction sets: observed dirs first, then broader sets
+    dir_candidates = []
+    if active_dirs:
+        dir_candidates.append(sorted(active_dirs))
+    dir_candidates.extend([
+        ['up', 'down', 'left', 'right'],
+        ['up', 'down'],
+        ['left', 'right'],
+    ])
+    # Deduplicate
+    seen = set()
+    unique_dirs = []
+    for d in dir_candidates:
+        key = tuple(d)
+        if key not in seen:
+            seen.add(key)
+            unique_dirs.append(d)
+
+    results = []
+    for directions_set in unique_dirs:
+        for stop_on in ['nonbg', 'any']:
+            prog = SearchProgram(
+                steps=[SearchStep(
+                    action='ray_project',
+                    params={
+                        'directions': directions_set,
+                        'ray_color': 'same',
+                        'stop_on': stop_on,
+                    },
+                )],
+                provenance='derive_ray_project',
+            )
+            if prog.verify(demos):
+                results.append(prog)
+                return results
+
+    # Try per-color ray projection (only the most common added color)
+    added_colors = set(int(out0[r, c]) for r, c in added)
+    for fill_c in list(added_colors)[:2]:  # limit to 2 colors
+        for directions_set in unique_dirs[:3]:  # limit direction sets
+            prog = SearchProgram(
+                steps=[SearchStep(
+                    action='ray_project',
+                    params={
+                        'directions': directions_set,
+                        'ray_color': int(fill_c),
+                        'stop_on': 'nonbg',
+                    },
+                )],
+                provenance='derive_ray_project',
+            )
+            if prog.verify(demos):
+                results.append(prog)
+                return results
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Flood fill adjacent
+# ---------------------------------------------------------------------------
+
+def _derive_flood_fill_adjacent(demos):
+    """Derive flood_fill_adjacent from demos.
+
+    Finds added bg-region pixels that border a consistent seed color.
+    """
+    from collections import Counter
+    from aria.guided.perceive import perceive
+
+    inp0, out0 = demos[0]
+    if inp0.shape != out0.shape:
+        return []
+
+    facts = perceive(inp0)
+    bg = facts.bg
+    diff_mask = (inp0 != out0)
+    if not diff_mask.any():
+        return []
+
+    # Find pixels added to bg
+    added = {}  # (r,c) -> color
+    for r, c in zip(*np.where(diff_mask)):
+        if int(inp0[r, c]) == bg and int(out0[r, c]) != bg:
+            added[(r, c)] = int(out0[r, c])
+
+    if not added:
+        return []
+
+    # Also check: no pixels were removed or recolored (flood fill only adds)
+    for r, c in zip(*np.where(diff_mask)):
+        if int(inp0[r, c]) != bg:
+            return []
+
+    # Build seed→fill mapping from adjacency structure
+    # For each added pixel, find which non-bg color is adjacent in input
+    h, w = inp0.shape
+    seed_fill_votes = Counter()  # (seed_color, fill_color) → count
+    for (r, c), fill_c in list(added.items())[:100]:  # sample for speed
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and int(inp0[nr, nc]) != bg:
+                seed_fill_votes[(int(inp0[nr, nc]), fill_c)] += 1
+
+    if not seed_fill_votes:
+        return []
+
+    # Only try the top 3 most-voted (seed, fill) pairs
+    results = []
+    for (seed_c, fill_c), _ in seed_fill_votes.most_common(3):
+        for conn in [4, 8]:
+            prog = SearchProgram(
+                steps=[SearchStep(
+                    action='flood_fill_adjacent',
+                    params={
+                        'seed_color': int(seed_c),
+                        'fill_color': int(fill_c),
+                        'connectivity': conn,
+                    },
+                )],
+                provenance='derive_flood_fill_adjacent',
+            )
+            if prog.verify(demos):
+                results.append(prog)
+                return results
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Dilate
+# ---------------------------------------------------------------------------
+
+def _derive_dilate(demos):
+    """Derive dilate from demos.
+
+    Finds added pixels within radius of existing objects.
+    """
+    from aria.guided.perceive import perceive
+
+    inp0, out0 = demos[0]
+    if inp0.shape != out0.shape:
+        return []
+
+    facts = perceive(inp0)
+    bg = facts.bg
+    diff_mask = (inp0 != out0)
+    if not diff_mask.any():
+        return []
+
+    # Only pixels added to bg
+    added = set()
+    for r, c in zip(*np.where(diff_mask)):
+        if int(inp0[r, c]) == bg and int(out0[r, c]) != bg:
+            added.add((r, c))
+
+    if not added:
+        return []
+
+    # Also check no pixels were removed (dilate only adds)
+    removed = any(int(inp0[r, c]) != bg and int(out0[r, c]) == bg
+                  for r, c in zip(*np.where(diff_mask)))
+    if removed:
+        return []
+
+    # Estimate radius: max min-distance from any added pixel to nearest object
+    obj_pixels = set()
+    for obj in facts.objects:
+        for r in range(obj.height):
+            for c in range(obj.width):
+                if obj.mask[r, c]:
+                    obj_pixels.add((obj.row + r, obj.col + c))
+
+    if not obj_pixels:
+        return []
+
+    max_dist = 0
+    for (ar, ac) in list(added)[:50]:  # sample to avoid O(n^2) on large grids
+        min_d = min(max(abs(ar - pr), abs(ac - pc)) for pr, pc in obj_pixels)
+        max_dist = max(max_dist, min_d)
+
+    if max_dist > 3:
+        return []
+
+    results = []
+    for radius in range(1, max_dist + 1):
+        for metric in ['chebyshev', 'manhattan']:
+            prog = SearchProgram(
+                steps=[SearchStep(
+                    action='dilate',
+                    params={'radius': radius, 'metric': metric, 'fill_color': 'same'},
+                )],
+                provenance='derive_dilate',
+            )
+            if prog.verify(demos):
+                results.append(prog)
+                return results
+
+    # Try specific fill colors (limit to most common)
+    from collections import Counter
+    fill_counts = Counter(int(out0[r, c]) for r, c in added)
+    for fc, _ in fill_counts.most_common(2):
+        for radius in range(1, max_dist + 1):
+            for metric in ['chebyshev', 'manhattan']:
+                prog = SearchProgram(
+                    steps=[SearchStep(
+                        action='dilate',
+                        params={'radius': radius, 'metric': metric, 'fill_color': int(fc)},
+                    )],
+                    provenance='derive_dilate',
+                )
+                if prog.verify(demos):
+                    results.append(prog)
+                    return results
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Erode
+# ---------------------------------------------------------------------------
+
+def _derive_erode(demos):
+    """Derive erode from demos.
+
+    Finds removed border pixels. Verifies ALL border pixels were removed.
+    """
+    from aria.guided.perceive import perceive
+
+    inp0, out0 = demos[0]
+    if inp0.shape != out0.shape:
+        return []
+
+    facts = perceive(inp0)
+    bg = facts.bg
+    diff_mask = (inp0 != out0)
+    if not diff_mask.any():
+        return []
+
+    # Only pixels removed (non-bg → bg), no pixels added
+    removed = set()
+    has_added = False
+    for r, c in zip(*np.where(diff_mask)):
+        if int(inp0[r, c]) != bg and int(out0[r, c]) == bg:
+            removed.add((r, c))
+        elif int(inp0[r, c]) == bg and int(out0[r, c]) != bg:
+            has_added = True
+
+    if not removed or has_added:
+        return []
+
+    # Quick check: every removed pixel should be on the border of its object
+    # (at least one bg neighbor). If not, this isn't erosion.
+    h, w = inp0.shape
+    border_count = 0
+    for (r, c) in list(removed)[:30]:  # sample
+        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+            nr, nc = r + dr, c + dc
+            if nr < 0 or nr >= h or nc < 0 or nc >= w or int(inp0[nr, nc]) == bg:
+                border_count += 1
+                break
+    if border_count < min(len(list(removed)[:30]), 1):
+        return []
+
+    results = []
+    for radius in [1, 2]:
+        for metric in ['chebyshev', 'manhattan']:
+            prog = SearchProgram(
+                steps=[SearchStep(
+                    action='erode',
+                    params={'radius': radius, 'metric': metric},
+                )],
+                provenance='derive_erode',
+            )
+            if prog.verify(demos):
+                results.append(prog)
+                return results
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Downscale
+# ---------------------------------------------------------------------------
+
+def _derive_downscale(demos):
+    """Derive downscale from demos.
+
+    Checks if input dims are divisible by output dims, tries each rule type.
+    """
+    results = []
+
+    inp0, out0 = demos[0]
+    ih, iw = inp0.shape
+    oh, ow = out0.shape
+
+    # Output must be strictly smaller
+    if oh >= ih or ow >= iw:
+        return []
+
+    # Check integer divisibility
+    if ih % oh != 0 or iw % ow != 0:
+        return []
+
+    block_h = ih // oh
+    block_w = iw // ow
+
+    # Verify consistent ratio across all demos
+    for inp, out in demos[1:]:
+        if inp.shape[0] % out.shape[0] != 0 or inp.shape[1] % out.shape[1] != 0:
+            return []
+        if inp.shape[0] // out.shape[0] != block_h or inp.shape[1] // out.shape[1] != block_w:
+            return []
+
+    for rule in ['mode', 'nonbg_any', 'max', 'min']:
+        prog = SearchProgram(
+            steps=[SearchStep(
+                action='downscale',
+                params={
+                    'block_h': block_h,
+                    'block_w': block_w,
+                    'rule': rule,
+                },
+            )],
+            provenance='derive_downscale',
+        )
+        if prog.verify(demos):
+            results.append(prog)
+            return results
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Strategy: Iterate to fixed point
+# ---------------------------------------------------------------------------
+
+def _derive_iterate_fixed(demos):
+    """Derive iterate_fixed by trying candidate body ops to fixed point.
+
+    Candidates: gravity, slide, dilate, erode, flood_fill_adjacent, ray_project.
+
+    Uses a two-phase approach: first check if one step of the body op moves
+    the grid closer to the target (quick filter), then verify full iteration.
+    """
+    import time
+    from aria.guided.perceive import perceive
+
+    inp0, out0 = demos[0]
+    if inp0.shape != out0.shape:
+        return []
+
+    diff_mask = (inp0 != out0)
+    if not diff_mask.any():
+        return []
+
+    # Budget: don't spend more than 2s total on iterate_fixed derivation
+    deadline = time.monotonic() + 2.0
+
+    # Collect candidate body actions — keep the list small
+    candidates = []
+
+    # Gravity/slide directions
+    for direction in ['down', 'up', 'left', 'right']:
+        candidates.append(('gravity', {'direction': direction}))
+        candidates.append(('slide', {'direction': direction}))
+
+    # Dilate/erode with radius 1 only
+    for metric in ['chebyshev', 'manhattan']:
+        candidates.append(('dilate', {'radius': 1, 'metric': metric,
+                                      'fill_color': 'same'}))
+        candidates.append(('erode', {'radius': 1, 'metric': metric}))
+
+    # Flood fill adjacent — use structural analysis to limit candidates
+    # instead of O(colors_in × colors_out) brute force
+    facts0 = perceive(inp0)
+    bg = facts0.bg
+    added = {}
+    for r, c in zip(*np.where(diff_mask)):
+        if int(inp0[r, c]) == bg and int(out0[r, c]) != bg:
+            added[(r, c)] = int(out0[r, c])
+    if added:
+        # Find seed colors: non-bg colors adjacent to added pixels
+        h, w = inp0.shape
+        seed_fill_pairs = set()
+        for (r, c), fill_c in list(added.items())[:20]:  # sample
+            for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                nr, nc = r + dr, c + dc
+                if 0 <= nr < h and 0 <= nc < w:
+                    v = int(inp0[nr, nc])
+                    if v != bg:
+                        seed_fill_pairs.add((v, fill_c))
+        # Only try the most plausible pairs (limit to 3)
+        for seed_c, fill_c in list(seed_fill_pairs)[:3]:
+            candidates.append(('flood_fill_adjacent', {
+                'seed_color': seed_c, 'fill_color': fill_c, 'connectivity': 4,
+            }))
+
+    # Ray project — just the common direction sets
+    for dirs in [['up', 'down', 'left', 'right'], ['up', 'down'], ['left', 'right']]:
+        candidates.append(('ray_project', {
+            'directions': dirs, 'ray_color': 'same', 'stop_on': 'nonbg',
+        }))
+
+    # Two-phase: quick single-step filter, then full verify
+    base_diff = int(np.sum(diff_mask))
+    results = []
+
+    for body_action, body_params in candidates:
+        if time.monotonic() > deadline:
+            break
+
+        # Phase 1: Apply body op once to first demo. If it doesn't move the
+        # grid closer to the target, skip full iteration.
+        try:
+            one_step = SearchProgram(
+                steps=[SearchStep(action=body_action, params=body_params)],
+                provenance='iterate_probe',
+            ).execute(inp0)
+        except Exception:
+            continue
+
+        if np.array_equal(one_step, inp0):
+            continue  # body op is a no-op on this input
+
+        one_step_diff = int(np.sum(one_step != out0))
+        if one_step_diff >= base_diff:
+            continue  # not moving closer to target
+
+        # Phase 2: Full iteration verify
+        prog = SearchProgram(
+            steps=[SearchStep(
+                action='iterate_fixed',
+                params={
+                    'body_action': body_action,
+                    'body_params': body_params,
+                    'max_steps': 50,
+                },
+            )],
+            provenance='derive_iterate_fixed',
+        )
+        try:
+            if prog.verify(demos):
+                results.append(prog)
+                return results
+        except Exception:
+            continue
+
+    return results

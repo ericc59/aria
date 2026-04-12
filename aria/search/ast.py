@@ -102,6 +102,12 @@ class Op(Enum):
     TRANSFORM_OBJ = auto()  # param: (selector_preds, xform_name)
     FILL_INTERIOR = auto()  # param: (selector_preds, color)
     FILL_ENCLOSED = auto()  # param: color or 'frame'
+    RAY_PROJECT = auto()    # param: {directions, ray_color, stop_on, selector}
+    FLOOD_FILL_ADJACENT = auto()  # param: {seed_color, fill_color, connectivity}
+    DILATE = auto()         # param: {selector, radius, metric, fill_color}
+    ERODE = auto()          # param: {selector, radius, metric}
+    DOWNSCALE = auto()      # param: {block_h, block_w, rule}
+    ITERATE_FIXED = auto()  # param: {body_action, body_params, body_select, max_steps}
 
     # Composition
     COMPOSE = auto()        # children executed sequentially on accumulating grid

@@ -35,8 +35,33 @@ def search_programs(
     2. Seed schema enumeration (blind parameter search)
     3. 2-step compositions
     """
-    del time_budget
+    import time as _time
+    import signal as _signal
+    _deadline = _time.monotonic() + time_budget
 
+    class _SearchTimeout(BaseException):
+        pass
+
+    def _alarm_handler(signum, frame):
+        raise _SearchTimeout()
+
+    _old_handler = _signal.signal(_signal.SIGALRM, _alarm_handler)
+    _old_timer = _signal.setitimer(_signal.ITIMER_REAL, max(time_budget, 0.05))
+
+    def _expired():
+        return _time.monotonic() > _deadline
+
+    try:
+        return _search_programs_inner(demos, time_budget, _deadline, _expired)
+    except _SearchTimeout:
+        return None
+    finally:
+        _signal.setitimer(_signal.ITIMER_REAL, 0)
+        _signal.signal(_signal.SIGALRM, _old_handler)
+
+
+def _search_programs_inner(demos, time_budget, _deadline, _expired):
+    """Core search logic, separated so the signal timer can interrupt it."""
     task_signatures = compute_task_signatures(
         tuple(DemoPair(input=inp, output=out) for inp, out in demos)
     )
@@ -52,11 +77,14 @@ def search_programs(
 
     # Phase 0a: Correspondence-derived programs (structural transitions)
     from aria.search.derive import derive_programs
-    derived = proposal_prior.rank_programs(derive_programs(demos), task_signatures)
+    derived = proposal_prior.rank_programs(derive_programs(demos, deadline=_deadline), task_signatures)
     for prog in derived:
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc, search_program=prog)
+
+    if _expired():
+        return None
 
     # Phase 0b: Cross-panel structural reasoning
     from aria.search.panels import derive_panel_programs
@@ -65,6 +93,9 @@ def search_programs(
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc, search_program=prog)
+
+    if _expired():
+        return None
 
     # Phase 0c: Panel algebra (odd-select, majority-select, etc.)
     from aria.search.panel_ops import derive_panel_algebra_programs
@@ -77,6 +108,9 @@ def search_programs(
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc, search_program=prog)
 
+    if _expired():
+        return None
+
     # Phase 0d: Region decode/transfer programs (panel/legend tasks)
     from aria.search.decode import derive_region_programs
     region_progs = proposal_prior.rank_programs(derive_region_programs(demos), task_signatures)
@@ -84,6 +118,9 @@ def search_programs(
         ast = prog.to_ast()
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc, search_program=prog)
+
+    if _expired():
+        return None
 
     # Phase 0e: Binding-guided decode (uses role/relation substrate)
     from aria.search.binding_derive import derive_from_binding
@@ -93,6 +130,9 @@ def search_programs(
         desc = f"search: {prog.provenance} [{prog.signature}]"
         return ASTProgram(ast, desc, search_program=prog)
 
+    if _expired():
+        return None
+
     # Phase 0f: Decomposition search (analysis-gated splitter + sub-derive)
     from aria.search.decompose import search_decomposed
     decomp = search_decomposed(demos, analysis)
@@ -101,10 +141,15 @@ def search_programs(
         desc = f"search: {decomp.provenance} [{decomp.signature}]"
         return ASTProgram(ast, desc, search_program=decomp)
 
+    if _expired():
+        return None
+
     registry = proposal_prior.rank_schemas(build_seed_registry(), task_signatures)
 
     # Phase 1: single-step schemas
     for schema in registry:
+        if _expired():
+            break
         candidates = schema.enumerate(demos)
         # Also try color-based selectors for object actions
         if schema.select_options != [None]:
@@ -130,10 +175,15 @@ def search_programs(
                 desc = f"search: {prog.provenance} [{prog.signature}]"
                 return ASTProgram(ast, desc)
 
+    if _expired():
+        return None
+
     # Phase 2: 2-step compositions (future: beam search)
     # For now: try pairs of single-step programs
     verified_singles = []
     for schema in registry:
+        if _expired():
+            break
         partials = rank_search_candidates(
             schema.enumerate(demos),
             demos,
@@ -163,7 +213,11 @@ def search_programs(
     )
 
     for p1 in verified_singles[:20]:
+        if _expired():
+            break
         for p2 in verified_singles[:20]:
+            if _expired():
+                break
             if p1.signature == p2.signature:
                 continue
             combined = SearchProgram(

@@ -1,5 +1,6 @@
 ## 2026-04-12
 
+- added `enclosed_fill` primitive: flood-fill bg from grid border, fill unreachable bg cells with a constant color derived from demos; `_try_simple_enclosed_fill` in derive.py, `_exec_enclosed_fill` in sketch.py; wired `_derive_legend_frame_fill` into derive dispatch (was defined but never called); `00d62c1b` and `a5313dff` now solve (2 new test-correct)
 - expanded decomposer from 3 to 8 splitter families (crop_non_bg_bbox, extract_panel_by_index×4, extract_legend_region, remove_color_c, apply_color_map, apply_global_transform×5, remove_objects_by_selector×3); each gated by TaskAnalysis fields
 - fixed analysis gating: `diff_type` priority rearrange > recolor_only (same multiset = rearrange); recolor_only suppresses spatial splitters; rearrange enables transforms; subtractive enables object-removal; dims_change/extraction enables crop
 - added negative-value guard in splitter loop to reject invalid intermediate grids

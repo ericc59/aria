@@ -66,3 +66,14 @@ def test_new_removed_colors():
     a = analyze_task([(inp, out)])
     assert 3 in a.new_colors
     assert 2 in a.removed_colors
+
+
+def test_nonzero_bg_classification():
+    """diff_type should work correctly when background is not 0."""
+    # Background is 5 (most common pixel)
+    inp = np.full((3, 3), 5, dtype=np.int8)
+    inp[1, 1] = 1
+    out = np.full((3, 3), 5, dtype=np.int8)
+    out[1, 1] = 2
+    a = analyze_task([(inp, out)])
+    assert a.diff_type == 'recolor_only'

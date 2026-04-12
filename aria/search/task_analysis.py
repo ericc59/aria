@@ -96,7 +96,8 @@ def _classify_diff_type(demos, same_dims):
     for inp, out in demos:
         if inp.shape != out.shape:
             return 'mixed'
-        bg = 0  # assume 0 is bg
+        # Infer bg as the most common pixel in the input
+        bg = int(np.bincount(inp.ravel().astype(np.intp)).argmax())
         in_nz = inp != bg
         out_nz = out != bg
 
@@ -154,8 +155,9 @@ def _check_extraction(demos):
 def _check_construction(demos):
     """Check if output shares <10% pixels/colors with input."""
     for inp, out in demos:
-        in_colors = set(int(x) for x in np.unique(inp)) - {0}
-        out_colors = set(int(x) for x in np.unique(out)) - {0}
+        bg = int(np.bincount(inp.ravel().astype(np.intp)).argmax())
+        in_colors = set(int(x) for x in np.unique(inp)) - {bg}
+        out_colors = set(int(x) for x in np.unique(out)) - {bg}
         if not out_colors:
             continue
         overlap = len(in_colors & out_colors) / len(out_colors)

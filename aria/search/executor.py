@@ -422,9 +422,12 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         sel_preds, sdr, sdc = node.param
         facts = perceive(grid)
         targets = _select_targets(sel_preds, facts)
+        context = {'selected_objects': targets}
         result = grid.copy()
         for obj in targets:
-            nr, nc = obj.row + sdr, obj.col + sdc
+            obj_dr = _resolve_param(sdr, obj, facts, context)
+            obj_dc = _resolve_param(sdc, obj, facts, context)
+            nr, nc = obj.row + obj_dr, obj.col + obj_dc
             for r in range(obj.height):
                 for c in range(obj.width):
                     if obj.mask[r, c]:
@@ -466,12 +469,15 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
             return None
         sel_preds, fill_color = node.param
         facts = perceive(grid)
+        targets = _select_targets(sel_preds, facts)
+        context = {'selected_objects': targets}
         result = grid.copy()
-        for obj in _select_targets(sel_preds, facts):
+        for obj in targets:
+            fc = _resolve_param(fill_color, obj, facts, context)
             frame = prim_find_frame(obj, grid)
             if frame and hasattr(frame, 'interior_mask'):
                 for r, c in zip(*np.where(frame.interior_mask)):
-                    result[frame.row + r, frame.col + c] = fill_color
+                    result[frame.row + r, frame.col + c] = fc
         return result
 
     if op == Op.FILL_ENCLOSED:
@@ -489,6 +495,42 @@ def execute_ast(node: ASTNode, inp: Grid, ctx: dict = None) -> Any:
         from aria.guided.synthesize import _apply_periodic_extend
         result = _apply_periodic_extend(grid, node.param)
         return result if result is not None else grid
+
+    if op == Op.RAY_PROJECT:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_ray_project(grid, node.param or {})
+
+    if op == Op.FLOOD_FILL_ADJACENT:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_flood_fill_adjacent(grid, node.param or {})
+
+    if op == Op.DILATE:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_dilate(grid, node.param or {})
+
+    if op == Op.ERODE:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_erode(grid, node.param or {})
+
+    if op == Op.DOWNSCALE:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_downscale(grid, node.param or {})
+
+    if op == Op.ITERATE_FIXED:
+        grid = _child(node, 0, inp, ctx)
+        if grid is None:
+            return None
+        return _exec_iterate_fixed(grid, node.param or {})
 
     # --- Composition ---
     if op == Op.COMPOSE:
@@ -696,6 +738,14 @@ def _exec_symmetry_repair(grid, damage_color):
     return result
 
 
+def _resolve_param(value, obj, facts, context=None):
+    """Resolve a param that may be a ParamExpr or a literal."""
+    from aria.search.sketch import ParamExpr
+    if isinstance(value, ParamExpr):
+        return eval_param_expr(value, obj, facts, context)
+    return value
+
+
 def _exec_recolor(node, inp, ctx):
     from aria.guided.perceive import perceive
     grid = _child(node, 0, inp, ctx)
@@ -703,12 +753,15 @@ def _exec_recolor(node, inp, ctx):
         return None
     facts = perceive(grid)
     sel_preds, new_color = node.param
+    targets = _select_targets(sel_preds, facts)
     result = grid.copy()
-    for obj in _select_targets(sel_preds, facts):
+    context = {'selected_objects': targets}
+    for obj in targets:
+        c = _resolve_param(new_color, obj, facts, context)
         for r in range(obj.height):
-            for c in range(obj.width):
-                if obj.mask[r, c]:
-                    result[obj.row + r, obj.col + c] = new_color
+            for cc in range(obj.width):
+                if obj.mask[r, cc]:
+                    result[obj.row + r, obj.col + cc] = c
     return result
 
 
@@ -779,16 +832,19 @@ def _exec_move(node, inp, ctx):
     result = grid.copy()
     rows, cols = grid.shape
     targets = _select_targets(sel_preds, facts)
+    context = {'selected_objects': targets}
     for obj in targets:
         for r in range(obj.height):
             for c in range(obj.width):
                 if obj.mask[r, c]:
                     result[obj.row + r, obj.col + c] = facts.bg
     for obj in targets:
+        obj_dr = _resolve_param(dr, obj, facts, context)
+        obj_dc = _resolve_param(dc, obj, facts, context)
         for r in range(obj.height):
             for c in range(obj.width):
                 if obj.mask[r, c]:
-                    nr, nc = obj.row + r + dr, obj.col + c + dc
+                    nr, nc = obj.row + r + obj_dr, obj.col + c + obj_dc
                     if 0 <= nr < rows and 0 <= nc < cols:
                         result[nr, nc] = obj.color
     return result
@@ -2672,4 +2728,239 @@ def _exec_quadrant_template_decode(grid, params):
             r0, r1, c0, c1 = quads_rc[qi]
             result[r0:r1, c0:c1] = applied
 
+    return result
+
+
+# ---------------------------------------------------------------------------
+# New object-level action executors
+# ---------------------------------------------------------------------------
+
+def _exec_ray_project(grid, params):
+    """Project rays from selected objects along cardinal directions."""
+    from aria.guided.perceive import perceive
+    facts = perceive(grid)
+    bg = facts.bg
+    directions = params.get('directions', ['up', 'down', 'left', 'right'])
+    ray_color = params.get('ray_color', 'same')
+    stop_on = params.get('stop_on', 'nonbg')
+    sel = params.get('selector')
+
+    targets = _select_targets(sel, facts) if sel else facts.objects
+    result = grid.copy()
+    h, w = grid.shape
+    dir_map = {'up': (-1, 0), 'down': (1, 0), 'left': (0, -1), 'right': (0, 1)}
+
+    for obj in targets:
+        for r in range(obj.height):
+            for c in range(obj.width):
+                if obj.mask[r, c]:
+                    pr, pc = obj.row + r, obj.col + c
+                    src_color = int(grid[pr, pc])
+                    fill = src_color if ray_color == 'same' else int(ray_color)
+                    for d in directions:
+                        dr, dc = dir_map.get(d, (0, 0))
+                        nr, nc = pr + dr, pc + dc
+                        while 0 <= nr < h and 0 <= nc < w:
+                            cell = int(result[nr, nc])
+                            if stop_on == 'nonbg' and cell != bg:
+                                break
+                            if stop_on == 'any' and cell != bg and cell != fill:
+                                break
+                            result[nr, nc] = fill
+                            nr += dr
+                            nc += dc
+    return result
+
+
+def _exec_flood_fill_adjacent(grid, params):
+    """Flood-fill background regions adjacent to a seed color."""
+    from aria.guided.perceive import perceive
+    from collections import deque
+    facts = perceive(grid)
+    bg = facts.bg
+    seed_color = int(params.get('seed_color', 0))
+    fill_color = int(params.get('fill_color', 0))
+    connectivity = int(params.get('connectivity', 4))
+
+    if fill_color == bg:
+        return grid
+
+    h, w = grid.shape
+    result = grid.copy()
+    visited = set()
+
+    if connectivity == 8:
+        neighbors = [(-1, -1), (-1, 0), (-1, 1), (0, -1),
+                     (0, 1), (1, -1), (1, 0), (1, 1)]
+    else:
+        neighbors = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+
+    for sr in range(h):
+        for sc in range(w):
+            if int(grid[sr, sc]) != seed_color:
+                continue
+            for dr, dc in neighbors:
+                nr, nc = sr + dr, sc + dc
+                if (0 <= nr < h and 0 <= nc < w
+                        and (nr, nc) not in visited
+                        and int(grid[nr, nc]) == bg):
+                    queue = deque([(nr, nc)])
+                    visited.add((nr, nc))
+                    while queue:
+                        cr, cc = queue.popleft()
+                        result[cr, cc] = fill_color
+                        for ddr, ddc in neighbors:
+                            nnr, nnc = cr + ddr, cc + ddc
+                            if (0 <= nnr < h and 0 <= nnc < w
+                                    and (nnr, nnc) not in visited
+                                    and int(grid[nnr, nnc]) == bg):
+                                visited.add((nnr, nnc))
+                                queue.append((nnr, nnc))
+    return result
+
+
+def _exec_dilate(grid, params):
+    """Dilate selected objects by radius into background cells."""
+    from aria.guided.perceive import perceive
+    facts = perceive(grid)
+    bg = facts.bg
+    sel = params.get('selector')
+    radius = int(params.get('radius', 1))
+    metric = params.get('metric', 'chebyshev')
+    fill_color = params.get('fill_color', 'same')
+
+    targets = _select_targets(sel, facts) if sel else facts.objects
+    h, w = grid.shape
+    result = grid.copy()
+
+    # Collect occupied pixels
+    occupied = set()
+    for obj in facts.objects:
+        for r in range(obj.height):
+            for c in range(obj.width):
+                if obj.mask[r, c]:
+                    occupied.add((obj.row + r, obj.col + c))
+
+    new_pixels = {}
+    for obj in targets:
+        color = int(fill_color) if fill_color != 'same' else obj.color
+        for r in range(obj.height):
+            for c in range(obj.width):
+                if obj.mask[r, c]:
+                    pr, pc = obj.row + r, obj.col + c
+                    for dr in range(-radius, radius + 1):
+                        for dc in range(-radius, radius + 1):
+                            if metric == 'manhattan' and abs(dr) + abs(dc) > radius:
+                                continue
+                            if metric == 'chebyshev' and max(abs(dr), abs(dc)) > radius:
+                                continue
+                            nr, nc = pr + dr, pc + dc
+                            if (0 <= nr < h and 0 <= nc < w
+                                    and (nr, nc) not in occupied
+                                    and int(result[nr, nc]) == bg):
+                                new_pixels[(nr, nc)] = color
+
+    for (r, c), color in new_pixels.items():
+        result[r, c] = color
+    return result
+
+
+def _exec_erode(grid, params):
+    """Erode selected objects by removing border pixels."""
+    from aria.guided.perceive import perceive
+    facts = perceive(grid)
+    bg = facts.bg
+    sel = params.get('selector')
+    radius = int(params.get('radius', 1))
+    metric = params.get('metric', 'chebyshev')
+
+    h, w = grid.shape
+    result = grid.copy()
+
+    for iteration in range(radius):
+        pixels_to_remove = set()
+        current_facts = perceive(result) if iteration > 0 else facts
+        current_targets = (_select_targets(sel, current_facts) if sel
+                          else current_facts.objects)
+
+        for obj in current_targets:
+            for r in range(obj.height):
+                for c in range(obj.width):
+                    if obj.mask[r, c]:
+                        pr, pc = obj.row + r, obj.col + c
+                        is_border = False
+                        if metric == 'manhattan':
+                            nbrs = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+                        else:
+                            nbrs = [(-1, -1), (-1, 0), (-1, 1), (0, -1),
+                                    (0, 1), (1, -1), (1, 0), (1, 1)]
+                        for dr, dc in nbrs:
+                            nr, nc = pr + dr, pc + dc
+                            if (nr < 0 or nr >= h or nc < 0 or nc >= w
+                                    or int(result[nr, nc]) == current_facts.bg):
+                                is_border = True
+                                break
+                        if is_border:
+                            pixels_to_remove.add((pr, pc))
+
+        for (r, c) in pixels_to_remove:
+            result[r, c] = current_facts.bg
+
+    return result
+
+
+def _exec_downscale(grid, params):
+    """Downscale grid by block aggregation."""
+    from collections import Counter
+    from aria.guided.perceive import perceive
+    facts = perceive(grid)
+    bg = facts.bg
+    block_h = int(params.get('block_h', 2))
+    block_w = int(params.get('block_w', 2))
+    rule = params.get('rule', 'mode')
+
+    ih, iw = grid.shape
+    if ih % block_h != 0 or iw % block_w != 0:
+        return grid
+
+    oh, ow = ih // block_h, iw // block_w
+    result = np.full((oh, ow), bg, dtype=grid.dtype)
+
+    for r in range(oh):
+        for c in range(ow):
+            block = grid[r * block_h:(r + 1) * block_h,
+                         c * block_w:(c + 1) * block_w]
+            if rule == 'mode':
+                non_bg = block[block != bg]
+                if len(non_bg) > 0:
+                    result[r, c] = Counter(non_bg.tolist()).most_common(1)[0][0]
+            elif rule == 'nonbg_any':
+                non_bg = block[block != bg]
+                if len(non_bg) > 0:
+                    result[r, c] = int(non_bg[0])
+            elif rule == 'max':
+                result[r, c] = int(block.max())
+            elif rule == 'min':
+                non_bg = block[block != bg]
+                if len(non_bg) > 0:
+                    result[r, c] = int(non_bg.min())
+    return result
+
+
+def _exec_iterate_fixed(grid, params):
+    """Iterate a body action to fixed point."""
+    from aria.search.sketch import SearchStep, SearchProgram
+    body_step = SearchStep(
+        action=params.get('body_action', ''),
+        params=params.get('body_params', {}),
+        select=params.get('body_select'),
+    )
+    max_steps = int(params.get('max_steps', 100))
+    result = grid.copy()
+    for _ in range(max_steps):
+        prev = result.copy()
+        result = SearchProgram(steps=[body_step],
+                               provenance='iterate_body').execute(result)
+        if np.array_equal(result, prev):
+            break
     return result
