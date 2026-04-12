@@ -44,6 +44,12 @@ def search_programs(
     proposal_model = load_default_search_family_model()
     macro_library = load_default_macro_library()
 
+    # Task analysis (cheap, run once, reusable by other tracks)
+    from aria.search.task_analysis import analyze_task
+    from aria.search.output_dims import solve_output_dims
+    analysis = analyze_task(demos)
+    dim_hypotheses = solve_output_dims(demos, analysis) if analysis.dims_change else []
+
     # Phase 0a: Correspondence-derived programs (structural transitions)
     from aria.search.derive import derive_programs
     derived = proposal_prior.rank_programs(derive_programs(demos), task_signatures)
