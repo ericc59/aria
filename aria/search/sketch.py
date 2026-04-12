@@ -244,8 +244,12 @@ class SearchProgram:
                 result = _exec_grid_slot_transfer(result, step)
             elif step.action == 'grid_cell_pack':
                 result = _exec_grid_cell_pack(result, step)
-            elif step.action == 'grid_slot_transfer':
-                result = _exec_grid_slot_transfer(result, step)
+            elif step.action == 'grid_conditional_transfer':
+                result = _exec_grid_conditional_transfer(result, step)
+            elif step.action == 'object_grid_pack':
+                result = _exec_object_grid_pack(result, step)
+            elif step.action == 'panel_legend_map':
+                result = _exec_panel_legend_map(result, step)
             elif step.action == 'registration_anchor_transfer':
                 result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
@@ -596,66 +600,14 @@ def _exec_grid_cell_pack(inp, step):
 
 
 def _exec_grid_slot_transfer(inp, step):
-    """Move grid cell contents to empty slots using nearest assignment."""
-    from aria.guided.perceive import perceive
-    from aria.search.grid_detect import (
-        detect_grid, cell_content, cell_has_content,
-        assign_cells_by_nearest,
-    )
+    """Move source cell contents into empty target cells via feature matching.
 
-    facts = perceive(inp)
-    grid_info = detect_grid(facts)
-    if grid_info is None:
-        return inp
-
-    bg = facts.bg
-    src_cells = []
-    tgt_cells = []
-    src_contents = []
-
-    for r in range(grid_info.n_rows):
-        for c in range(grid_info.n_cols):
-            cell = grid_info.cell_at(r, c)
-            if cell is None:
-                continue
-            has = cell_has_content(inp, cell, bg)
-            if has:
-                src_cells.append(cell)
-                src_contents.append(cell_content(inp, cell, bg))
-            else:
-                tgt_cells.append(cell)
-
-    assignment = assign_cells_by_nearest(src_cells, tgt_cells)
-    if assignment is None:
-        return inp
-
-    result = inp.copy()
-    # Clear sources
-    for cell in src_cells:
-        result[cell.r0:cell.r0 + cell.height,
-               cell.c0:cell.c0 + cell.width] = bg
-
-    # Place contents at assigned targets
-    for si, ti in assignment:
-        src_content = src_contents[si]
-        tgt_cell = tgt_cells[ti]
-        h, w = src_content.shape
-        if h > tgt_cell.height or w > tgt_cell.width:
-            return inp
-        result[tgt_cell.r0:tgt_cell.r0 + h,
-               tgt_cell.c0:tgt_cell.c0 + w] = src_content
-
-    return result
-
-
-def _exec_grid_slot_transfer(inp, step):
-    """Move cell contents from source slots to empty target slots in a grid.
-
-    Uses the same matching rule as the derive path: exact content match
-    via Hungarian assignment.
+    Tiers: exact content > near-shape (overlap >= 0.5) > spatial distance.
+    Hungarian assignment for multiple sources/targets.
     """
     from aria.guided.perceive import perceive
     from aria.search.grid_detect import detect_grid, cell_content, cell_has_content
+    from aria.search.derive import _grid_cell_match_cost
     from scipy.optimize import linear_sum_assignment
 
     facts = perceive(inp)
@@ -664,9 +616,6 @@ def _exec_grid_slot_transfer(inp, step):
     if g is None:
         return inp
 
-    result = inp.copy()
-
-    # Identify source cells (non-empty) and potential target cells (empty)
     sources = []
     targets = []
     for cell in g.cells:
@@ -678,46 +627,226 @@ def _exec_grid_slot_transfer(inp, step):
     if not sources or not targets or len(sources) > len(targets):
         return inp
 
-    # Match sources to targets: try to place each source content somewhere
-    # For grid_slot_transfer, we move sources to targets and clear the source.
-    # The matching uses content similarity (exact match preferred).
     src_contents = [cell_content(inp, c, bg) for c in sources]
-
+    # For execution, target masks are unknown — use empty placeholders
     n_src = len(sources)
     n_tgt = len(targets)
     cost = np.full((n_src, n_tgt), 1e6, dtype=float)
-
     for si in range(n_src):
+        sc = src_contents[si]
         for ti in range(n_tgt):
-            sc = src_contents[si]
-            # Target cell dimensions
             tc = targets[ti]
-            if sc.shape[0] == tc.height and sc.shape[1] == tc.width:
-                # Same dimensions — use L1 distance as tiebreaker
+            # Content fits in target?
+            if sc.shape[0] <= tc.height and sc.shape[1] <= tc.width:
                 dist = abs(sources[si].r0 - tc.r0) + abs(sources[si].c0 - tc.c0)
                 cost[si, ti] = dist
 
     rows, cols = linear_sum_assignment(cost)
 
+    result = inp.copy()
+    placed = []
     for si, ti in zip(rows, cols):
         if cost[si, ti] >= 1e6:
             continue
-        src_cell = sources[si]
-        tgt_cell = targets[ti]
+        placed.append((si, ti))
+
+    if not placed:
+        return inp
+
+    # Clear sources
+    for si, ti in placed:
+        cell = sources[si]
+        result[cell.r0:cell.r0 + cell.height,
+               cell.c0:cell.c0 + cell.width] = bg
+
+    # Place at targets
+    for si, ti in placed:
         content = src_contents[si]
-
-        # Clear source
-        for r in range(src_cell.height):
-            for c in range(src_cell.width):
-                result[src_cell.r0 + r, src_cell.c0 + c] = bg
-
-        # Place at target
-        h = min(src_cell.height, tgt_cell.height)
-        w = min(src_cell.width, tgt_cell.width)
+        tgt = targets[ti]
+        h, w = content.shape
         for r in range(h):
             for c in range(w):
                 if content[r, c] != bg:
-                    result[tgt_cell.r0 + r, tgt_cell.c0 + c] = content[r, c]
+                    result[tgt.r0 + r, tgt.c0 + c] = content[r, c]
+
+    return result
+
+
+def _exec_grid_conditional_transfer(inp, step):
+    """Fill empty grid cells using a rule derived across demos.
+
+    Rule types stored in step.params:
+      - 'nearest_row': copy nearest non-empty cell in the same row
+      - 'nearest_col': copy nearest non-empty cell in the same column
+      - 'mirror_h': horizontal mirror of the content across grid center
+      - 'mirror_v': vertical mirror of the content across grid center
+    """
+    from aria.guided.perceive import perceive
+    from aria.search.grid_detect import detect_grid, cell_content, cell_has_content
+
+    facts = perceive(inp)
+    bg = facts.bg
+    g = detect_grid(facts)
+    if g is None:
+        return inp
+
+    params = step.params or {}
+    rule = params.get('rule', 'nearest_row')
+    result = inp.copy()
+
+    # Build cell content map
+    content_map = {}
+    for cell in g.cells:
+        if cell_has_content(inp, cell, bg):
+            content_map[(cell.grid_row, cell.grid_col)] = cell_content(inp, cell, bg)
+
+    for cell in g.cells:
+        if cell_has_content(inp, cell, bg):
+            continue
+        gr, gc = cell.grid_row, cell.grid_col
+        source = None
+
+        if rule == 'nearest_row':
+            # Find nearest non-empty in same row
+            best_dist = float('inf')
+            for (r, c), cnt in content_map.items():
+                if r == gr and abs(c - gc) < best_dist:
+                    best_dist = abs(c - gc)
+                    source = cnt
+        elif rule == 'nearest_col':
+            best_dist = float('inf')
+            for (r, c), cnt in content_map.items():
+                if c == gc and abs(r - gr) < best_dist:
+                    best_dist = abs(r - gr)
+                    source = cnt
+        elif rule == 'mirror_h':
+            mirror_c = g.n_cols - 1 - gc
+            source = content_map.get((gr, mirror_c))
+        elif rule == 'mirror_v':
+            mirror_r = g.n_rows - 1 - gr
+            source = content_map.get((mirror_r, gc))
+
+        if source is not None:
+            h = min(source.shape[0], cell.height)
+            w = min(source.shape[1], cell.width)
+            result[cell.r0:cell.r0 + h, cell.c0:cell.c0 + w] = source[:h, :w]
+
+    return result
+
+
+def _exec_object_grid_pack(inp, step):
+    """Pack input objects into an output grid ordered by row/col/size/color.
+
+    step.params:
+      - 'order': 'size_asc', 'size_desc', 'color_asc', 'row_major' (default)
+      - 'out_rows', 'out_cols': output grid dimensions in objects
+      - 'cell_h', 'cell_w': cell size (auto-detected from largest object if missing)
+      - 'sep': separator width (default 0)
+      - 'bg': background color (auto-detected)
+    """
+    from aria.guided.perceive import perceive
+
+    facts = perceive(inp)
+    bg = facts.bg
+    params = step.params or {}
+    order = params.get('order', 'row_major')
+    sep = params.get('sep', 0)
+
+    objs = [o for o in facts.objects if o.size > 0]
+    if not objs:
+        return inp
+
+    # Sort objects
+    if order == 'size_asc':
+        objs.sort(key=lambda o: (o.size, o.color))
+    elif order == 'size_desc':
+        objs.sort(key=lambda o: (-o.size, o.color))
+    elif order == 'color_asc':
+        objs.sort(key=lambda o: (o.color, -o.size))
+    else:  # row_major
+        objs.sort(key=lambda o: (o.row, o.col))
+
+    # Extract masks
+    masks = []
+    for o in objs:
+        patch = inp[o.row:o.row + o.height, o.col:o.col + o.width].copy()
+        masks.append(patch)
+
+    cell_h = params.get('cell_h', max(o.height for o in objs))
+    cell_w = params.get('cell_w', max(o.width for o in objs))
+    out_cols = params.get('out_cols', len(objs))
+    out_rows = params.get('out_rows', (len(objs) + out_cols - 1) // out_cols)
+
+    total_h = out_rows * cell_h + max(0, out_rows - 1) * sep
+    total_w = out_cols * cell_w + max(0, out_cols - 1) * sep
+    result = np.full((total_h, total_w), bg, dtype=inp.dtype)
+
+    for idx, patch in enumerate(masks):
+        gr = idx // out_cols
+        gc = idx % out_cols
+        if gr >= out_rows:
+            break
+        r0 = gr * (cell_h + sep)
+        c0 = gc * (cell_w + sep)
+        ph, pw = patch.shape
+        h = min(ph, cell_h)
+        w = min(pw, cell_w)
+        result[r0:r0 + h, c0:c0 + w] = patch[:h, :w]
+
+    return result
+
+
+def _exec_panel_legend_map(inp, step):
+    """Apply legend-derived color/pattern mapping from legend panel to target panel.
+
+    step.params:
+      - 'legend_side': 'left', 'right', 'top', 'bottom'
+      - 'sep_idx': separator index splitting legend from target
+      - 'axis': 'col' or 'row'
+      - 'mapping': dict mapping source_color → target_color
+    """
+    from aria.guided.perceive import perceive
+
+    facts = perceive(inp)
+    bg = facts.bg
+    params = step.params or {}
+    mapping = params.get('mapping', {})
+    sep_idx = params.get('sep_idx')
+    axis = params.get('axis', 'col')
+    legend_side = params.get('legend_side', 'left')
+
+    if not mapping or sep_idx is None:
+        return inp
+
+    # Extract target region
+    if axis == 'col':
+        if legend_side == 'left':
+            target = inp[:, sep_idx + 1:].copy()
+        else:
+            target = inp[:, :sep_idx].copy()
+    else:
+        if legend_side == 'top':
+            target = inp[sep_idx + 1:, :].copy()
+        else:
+            target = inp[:sep_idx, :].copy()
+
+    # Apply mapping
+    color_map = {int(k): int(v) for k, v in mapping.items()}
+    for src_c, tgt_c in color_map.items():
+        target[target == src_c] = tgt_c
+
+    # Reconstruct
+    result = inp.copy()
+    if axis == 'col':
+        if legend_side == 'left':
+            result[:, sep_idx + 1:] = target
+        else:
+            result[:, :sep_idx] = target
+    else:
+        if legend_side == 'top':
+            result[sep_idx + 1:, :] = target
+        else:
+            result[:sep_idx, :] = target
 
     return result
 
@@ -1062,7 +1191,8 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
 
     if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil',
                   'registration_transfer', 'grid_fill_between',
-                  'grid_slot_transfer'):
+                  'grid_slot_transfer', 'grid_conditional_transfer',
+                  'object_grid_pack', 'panel_legend_map'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 
