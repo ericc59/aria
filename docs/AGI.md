@@ -30,6 +30,32 @@ A plausible AGI system needs at least six layers:
 
 Its long-term value is not that it solves ARC directly. Its value is that it explores what a reusable skill/world-model substrate could look like.
 
+## Layer Interfaces (Current Hypothesis)
+
+Each layer must pass structured artifacts, not just free-form text. The working contract in `aria` is:
+
+Layer 1 → Layer 2:
+- structured scene facts (objects, roles, relations, grids)
+- candidate transforms (small, cheap hypotheses)
+
+Layer 2 → Layer 3:
+- verified candidate programs
+- compact structural signatures (action + selector patterns)
+
+Layer 3 → Layer 4:
+- ranked candidate program families
+- traces of which strategies failed and why
+
+Layer 4 → Layer 5:
+- verified solutions + reasoning traces
+- intermediate states and decision points
+
+Layer 5 → Layer 6:
+- consolidation targets (macros, priors, routing weights)
+- compression objective (see Layer 6)
+
+This is intentionally concrete: the system should pass **structured state** rather than “insights.”
+
 ## Layer 1: Fast Intuition
 
 This layer is responsible for:
@@ -113,6 +139,15 @@ This router is probably best understood as hybrid:
 
 A pure neural router is unlikely to be enough on its own.
 
+Current status in `aria`:
+- Routing is hardcoded by phase order in `aria/search/search.py`.
+- This is the dominant ceiling on coverage because it allocates compute poorly.
+- Learned/adaptive routing is a prerequisite for consolidation to matter.
+
+Hypothesis + success criterion:
+- Hypothesis: a simple learned router over scene facts can push the correct strategy family into the top‑K.
+- Success criterion: top‑K routing recall > 80% on solved tasks with reduced search cost.
+
 ## Layer 4: Deliberate Reasoning / Executive Control
 
 This is the layer most likely to look LLM-like or LLM-hybrid.
@@ -130,6 +165,15 @@ Its job is not just to summarize. It should:
 This is the closest analogue to internal thought or reflective reasoning.
 
 An LLM may be a major part of this layer, but probably should not be the whole thing.
+
+Current status in `aria`:
+- This layer is effectively **missing**.
+- The system has a 2‑step composition ceiling and no explicit planner.
+- This is a primary architectural gap behind the current solve ceiling.
+
+Hypothesis + success criterion:
+- Hypothesis: a structured decomposition planner (not just longer enumeration) unlocks 3–5 step tasks.
+- Success criterion: multi‑step tasks solved without exponential candidate growth.
 
 ## Layer 5: Memory and Skill Consolidation
 
@@ -150,6 +194,14 @@ Without this layer, the system may remain impressive but transient:
 
 - good at solving
 - poor at cumulative improvement
+
+Current status in `aria`:
+- Trace capture and macro mining exist, but reuse is still shallow.
+- Macros must become parameterized, derivation‑bound templates to be useful.
+
+Hypothesis + success criterion:
+- Hypothesis: replay + parameterized macro mining compresses repeated solves into reusable templates.
+- Success criterion: measurable solve‑rate or search‑budget improvement on held‑out tasks.
 
 ## Layer 6: Offline "Sleep"
 
@@ -174,6 +226,15 @@ Possible functions:
 - discover more compact latent representations
 
 This layer is important because AGI should improve not only in capability, but in efficiency.
+
+Compression objective (provisional):
+- Minimize description length of the solution corpus while preserving solve coverage.
+- A concrete proxy is MDL: total program length + macro library size + routing complexity.
+- This forces the system to prefer reusable abstractions over one‑off heuristics.
+
+Hypothesis + success criterion:
+- Hypothesis: consolidation that optimizes MDL yields better generalization with stable or lower compute.
+- Success criterion: solve coverage increases while average program length or search cost decreases.
 
 ## Efficiency as a Core Requirement
 
@@ -219,6 +280,17 @@ It is to generalize the architectural pattern:
 - verifiers
 
 Then instantiate that pattern in multiple domains.
+
+## Current Instantiation (Concrete Mapping)
+
+| Layer | Concept | `aria` Implementation | Status |
+|---|---|---|---|
+| 1 | Fast intuition | `perceive.py`, seed schemas, quick derives | Working |
+| 2 | World model | `binding.py`, `selection_facts.py`, `geometry.py` | Partial |
+| 3 | Router | Phase ordering in `search.py` | Hardcoded |
+| 4 | Deliberate reasoning | (none) | Missing |
+| 5 | Consolidation | traces, `macro_miner.py` | Scaffolded |
+| 6 | Sleep | build scripts | Manual |
 
 ## Multi-System AGI Picture
 
