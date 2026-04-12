@@ -41,39 +41,13 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         return progs
 
     # Newer structural strategies (after canonical ones)
-    progs = _derive_cross_stencil_recolor(demos)
-    if progs:
-        return progs
-
+    # NOTE: mid-level benchmark-shaped strategies are quarantined from default
+    # derive routing; they remain in the codebase for macro/replay use.
     progs = _derive_frame_bbox_pack(demos)
     if progs:
         return progs
 
-    progs = _derive_anomaly_halo(demos)
-    if progs:
-        return progs
-
-    progs = _derive_cavity_transfer(demos)
-    if progs:
-        return progs
-
     progs = _derive_masked_patch_transfer(demos)
-    if progs:
-        return progs
-
-    progs = _derive_separator_motif_broadcast(demos)
-    if progs:
-        return progs
-
-    progs = _derive_line_arith_broadcast(demos)
-    if progs:
-        return progs
-
-    progs = _derive_barrier_port_transfer(demos)
-    if progs:
-        return progs
-
-    progs = _derive_legend_frame_fill(demos)
     if progs:
         return progs
 
@@ -104,13 +78,16 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     if progs:
         return progs
 
+    # Strategy: Object grid pack (repack objects into different-size output)
+    progs = _derive_object_grid_pack_prescan(demos)
+    if progs:
+        return progs
+
     # Remaining strategies require same-shape
     if any(inp.shape != out.shape for inp, out in demos):
         return []
 
-    progs = _derive_diagonal_collision_trace(demos)
-    if progs:
-        return progs
+    # Quarantined: diagonal_collision_trace (benchmark-shaped)
 
     # Compute transitions for all demos
     all_transitions = []
@@ -174,9 +151,14 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_grid_slot_transfer(all_facts, demos)
         results.extend(progs)
 
-    # Strategy 2j: Grid-slot transfer (modules placed into empty grid cells)
+    # Strategy 2k: Grid-conditional transfer (fill empty cells by rule)
     if not results:
-        progs = _derive_grid_slot_transfer(all_facts, demos)
+        progs = _derive_grid_conditional_transfer(all_facts, demos)
+        results.extend(progs)
+
+    # Strategy 2m: Panel legend map (legend → color mapping on target panel)
+    if not results:
+        progs = _derive_panel_legend_map(all_facts, demos)
         results.extend(progs)
 
     # Strategy 3: Stamp/creation (new objects from input object shapes)
@@ -184,8 +166,7 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
     results.extend(progs)
 
     # Strategy 4: Marker stamp (small markers → learned template stamped at each)
-    progs = _derive_marker_stamp(demos, all_facts)
-    results.extend(progs)
+    # Quarantined from default derive (benchmark-shaped); keep for macro/replay.
 
 
     return results
@@ -1767,75 +1748,85 @@ def _derive_grid_cell_pack(all_facts, demos):
 # Strategy 2j: Grid-slot transfer
 # ---------------------------------------------------------------------------
 
-def _derive_grid_slot_transfer(all_facts, demos):
-    """Move modules into empty grid cells by shape/mask compatibility.
+def _grid_cell_match_cost(src_mask, tgt_mask, src_cell, tgt_cell, bg):
+    """Tiered cost for matching a source cell to a target cell.
 
-    Detects a grid (separator or implicit), identifies source cells
-    with content and target cells that are empty in the input but
-    filled in the output. Matches each source to a target using
-    mask compatibility and Hungarian assignment.
+    Tier 0 (cost 0): exact content match (same shape + pixels).
+    Tier 1 (cost 1-10): same shape, near-identical (mask overlap >= 0.5).
+    Tier 2 (cost 20+): same cell dims, spatial distance tiebreaker.
+    Tier INF (cost 1e6): incompatible sizes.
+    """
+    sh, sw = src_mask.shape
+    th, tw = tgt_mask.shape
+    if sh != tgt_cell.height or sw != tgt_cell.width:
+        # src content doesn't fit in target cell
+        if sh > tgt_cell.height or sw > tgt_cell.width:
+            return 1e6
+    # Exact content match
+    if src_mask.shape == tgt_mask.shape and np.array_equal(src_mask, tgt_mask):
+        return 0.0
+    # Same-shape near match (mask overlap)
+    if src_mask.shape == tgt_mask.shape:
+        src_nz = src_mask != bg
+        tgt_nz = tgt_mask != bg
+        overlap = int(np.sum(src_nz & tgt_nz))
+        total = max(int(np.sum(src_nz)), int(np.sum(tgt_nz)), 1)
+        ratio = overlap / total
+        if ratio >= 0.5:
+            return 1.0 + (1.0 - ratio) * 9.0
+    # Same cell dims — spatial distance tiebreaker
+    if sh <= tgt_cell.height and sw <= tgt_cell.width:
+        dist = abs(src_cell.r0 - tgt_cell.r0) + abs(src_cell.c0 - tgt_cell.c0)
+        return 20.0 + dist
+    return 1e6
+
+
+def _derive_grid_slot_transfer(all_facts, demos):
+    """Move source cell contents into empty target cells via feature matching.
+
+    Feature matching tiers: exact content > near-shape > spatial.
+    Uses Hungarian assignment when multiple sources/targets exist.
     """
     from aria.search.grid_detect import (
         detect_grid, cell_content, cell_has_content,
     )
     from scipy.optimize import linear_sum_assignment
 
-    # All demos must have a grid
-    grids = []
     for di, (inp, out) in enumerate(demos):
         facts = all_facts[di]
         g = detect_grid(facts)
         if g is None:
             return []
-        grids.append(g)
-
-    # Verify the pattern in each demo
-    for di, (inp, out) in enumerate(demos):
-        facts = all_facts[di]
         bg = facts.bg
-        g = grids[di]
 
-        # Source cells: have content in input, empty in output
         sources = []
-        # Target cells: empty in input, have content in output
         targets = []
-        # Unchanged cells: same in input and output
         for cell in g.cells:
-            inp_content = cell_has_content(inp, cell, bg)
-            out_content = cell_has_content(out, cell, bg)
-            if inp_content and not out_content:
+            in_has = cell_has_content(inp, cell, bg)
+            out_has = cell_has_content(out, cell, bg)
+            if in_has and not out_has:
                 sources.append(cell)
-            elif not inp_content and out_content:
+            elif not in_has and out_has:
                 targets.append(cell)
 
-        if not sources or not targets:
-            return []
-        if len(sources) != len(targets):
+        if not sources or not targets or len(sources) != len(targets):
             return []
 
-        # Match sources to targets by content compatibility
+        # Feature-based matching
         src_masks = [cell_content(inp, c, bg) for c in sources]
         tgt_masks = [cell_content(out, c, bg) for c in targets]
-
         n = len(sources)
         cost = np.full((n, n), 1e6, dtype=float)
         for si in range(n):
             for ti in range(n):
-                sm = src_masks[si]
-                tm = tgt_masks[ti]
-                if sm.shape == tm.shape and np.array_equal(sm, tm):
-                    # Exact content match
-                    cost[si, ti] = 0.0
-                elif sm.shape == tm.shape:
-                    # Same shape, check similarity
-                    diff = int(np.sum(sm != tm))
-                    cost[si, ti] = float(diff)
-
+                cost[si, ti] = _grid_cell_match_cost(
+                    src_masks[si], tgt_masks[ti],
+                    sources[si], targets[ti], bg,
+                )
         rows, cols = linear_sum_assignment(cost)
         if any(cost[r, c] >= 1e6 for r, c in zip(rows, cols)):
             return []
 
-    # Pattern holds. Emit grid_slot_transfer step.
     prog = SearchProgram(
         steps=[SearchStep('grid_slot_transfer', {})],
         provenance='derive:grid_slot_transfer',
@@ -1846,88 +1837,313 @@ def _derive_grid_slot_transfer(all_facts, demos):
 
 
 # ---------------------------------------------------------------------------
-# Strategy 2j: Grid-slot transfer
+# Strategy 2k: Grid-conditional transfer
 # ---------------------------------------------------------------------------
 
-def _derive_grid_slot_transfer(all_facts, demos):
-    """Move non-empty grid cell contents into empty slots by nearest assignment."""
+def _derive_grid_conditional_transfer(all_facts, demos):
+    """Fill empty grid cells using a row/col/mirror rule verified across demos.
+
+    Tries four rules: nearest_row, nearest_col, mirror_h, mirror_v.
+    Accepts the first rule that reproduces the output in all demos.
+    """
     from aria.search.grid_detect import (
         detect_grid, cell_content, cell_has_content,
-        assign_cells_by_nearest,
     )
 
-    all_ok = True
+    grids = []
     for di, (inp, out) in enumerate(demos):
-        facts = all_facts[di]
-        grid_info = detect_grid(facts)
-        if grid_info is None:
-            all_ok = False
-            break
+        g = detect_grid(all_facts[di])
+        if g is None:
+            return []
+        grids.append(g)
 
-        src_cells = []
-        tgt_cells = []
-        src_contents = []
+    for rule in ('nearest_row', 'nearest_col', 'mirror_h', 'mirror_v'):
+        all_ok = True
+        for di, (inp, out) in enumerate(demos):
+            bg = all_facts[di].bg
+            g = grids[di]
 
-        for r in range(grid_info.n_rows):
-            for c in range(grid_info.n_cols):
-                cell = grid_info.cell_at(r, c)
-                if cell is None:
+            # Build content map from input
+            content_map = {}
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    content_map[(cell.grid_row, cell.grid_col)] = cell_content(inp, cell, bg)
+
+            # Check: every empty input cell that has content in output
+            # must match the rule prediction
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
                     continue
-                in_has = cell_has_content(inp, cell, facts.bg)
-                out_has = cell_has_content(out, cell, facts.bg)
-                if in_has and out_has:
+                if not cell_has_content(out, cell, bg):
+                    continue
+                gr, gc = cell.grid_row, cell.grid_col
+                expected = cell_content(out, cell, bg)
+                predicted = None
+
+                if rule == 'nearest_row':
+                    best_dist = float('inf')
+                    for (r, c), cnt in content_map.items():
+                        if r == gr and abs(c - gc) < best_dist:
+                            best_dist = abs(c - gc)
+                            predicted = cnt
+                elif rule == 'nearest_col':
+                    best_dist = float('inf')
+                    for (r, c), cnt in content_map.items():
+                        if c == gc and abs(r - gr) < best_dist:
+                            best_dist = abs(r - gr)
+                            predicted = cnt
+                elif rule == 'mirror_h':
+                    predicted = content_map.get((gr, g.n_cols - 1 - gc))
+                elif rule == 'mirror_v':
+                    predicted = content_map.get((g.n_rows - 1 - gr, gc))
+
+                if predicted is None or predicted.shape != expected.shape:
                     all_ok = False
                     break
-                if not in_has and not out_has:
-                    continue
-                if in_has and not out_has:
-                    src_cells.append(cell)
-                    src_contents.append(cell_content(inp, cell, facts.bg))
-                elif not in_has and out_has:
-                    tgt_cells.append(cell)
+                if not np.array_equal(predicted, expected):
+                    all_ok = False
+                    break
             if not all_ok:
                 break
 
-        if not all_ok:
-            break
-
-        if not src_cells or not tgt_cells:
-            all_ok = False
-            break
-
-        assignment = assign_cells_by_nearest(src_cells, tgt_cells)
-        if assignment is None:
-            all_ok = False
-            break
-
-        result = inp.copy()
-        for cell in src_cells:
-            result[cell.r0:cell.r0 + cell.height,
-                   cell.c0:cell.c0 + cell.width] = facts.bg
-
-        for si, ti in assignment:
-            src_content = src_contents[si]
-            tgt_cell = tgt_cells[ti]
-            h, w = src_content.shape
-            if h > tgt_cell.height or w > tgt_cell.width:
-                all_ok = False
-                break
-            result[tgt_cell.r0:tgt_cell.r0 + h,
-                   tgt_cell.c0:tgt_cell.c0 + w] = src_content
-
-        if not all_ok or not np.array_equal(result, out):
-            all_ok = False
-            break
-
-    if all_ok:
-        prog = SearchProgram(
-            steps=[SearchStep('grid_slot_transfer', {})],
-            provenance='derive:grid_slot_transfer',
-        )
-        if prog.verify(demos):
-            return [prog]
+        if all_ok:
+            prog = SearchProgram(
+                steps=[SearchStep('grid_conditional_transfer', {'rule': rule})],
+                provenance='derive:grid_conditional_transfer',
+            )
+            if prog.verify(demos):
+                return [prog]
 
     return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2l: Object grid pack
+# ---------------------------------------------------------------------------
+
+def _derive_object_grid_pack_prescan(demos):
+    """Prescan variant that works before all_facts is computed."""
+    from aria.guided.perceive import perceive
+    all_facts = [perceive(inp) for inp, out in demos]
+    return _derive_object_grid_pack(all_facts, demos)
+
+
+def _derive_object_grid_pack(all_facts, demos):
+    """Pack input objects into output grid by size/color/position order.
+
+    Detects when the output is a regular arrangement of input object patches
+    in a new grid layout. Tries row_major, size_asc, size_desc, color_asc orderings.
+    """
+    from aria.guided.perceive import perceive
+
+    for order in ('row_major', 'size_asc', 'size_desc', 'color_asc'):
+        all_ok = True
+        shared_params = None
+
+        for di, (inp, out) in enumerate(demos):
+            facts = all_facts[di]
+            bg = facts.bg
+            objs = [o for o in facts.objects if o.size > 0]
+            if not objs:
+                all_ok = False
+                break
+
+            # Sort
+            if order == 'size_asc':
+                objs.sort(key=lambda o: (o.size, o.color))
+            elif order == 'size_desc':
+                objs.sort(key=lambda o: (-o.size, o.color))
+            elif order == 'color_asc':
+                objs.sort(key=lambda o: (o.color, -o.size))
+            else:
+                objs.sort(key=lambda o: (o.row, o.col))
+
+            patches = [inp[o.row:o.row+o.height, o.col:o.col+o.width].copy() for o in objs]
+            cell_h = max(o.height for o in objs)
+            cell_w = max(o.width for o in objs)
+
+            # Infer grid dims from output shape
+            out_h, out_w = out.shape
+            # Try with sep=0 and sep=1
+            found = False
+            for sep in (0, 1):
+                for out_cols in range(1, len(objs) + 1):
+                    out_rows = (len(objs) + out_cols - 1) // out_cols
+                    th = out_rows * cell_h + max(0, out_rows - 1) * sep
+                    tw = out_cols * cell_w + max(0, out_cols - 1) * sep
+                    if th != out_h or tw != out_w:
+                        continue
+
+                    # Build candidate output
+                    candidate = np.full((th, tw), bg, dtype=inp.dtype)
+                    for idx, patch in enumerate(patches):
+                        gr = idx // out_cols
+                        gc = idx % out_cols
+                        if gr >= out_rows:
+                            break
+                        r0 = gr * (cell_h + sep)
+                        c0 = gc * (cell_w + sep)
+                        ph, pw = patch.shape
+                        h = min(ph, cell_h)
+                        w = min(pw, cell_w)
+                        candidate[r0:r0+h, c0:c0+w] = patch[:h, :w]
+
+                    if np.array_equal(candidate, out):
+                        params = {
+                            'order': order, 'cell_h': cell_h, 'cell_w': cell_w,
+                            'out_rows': out_rows, 'out_cols': out_cols, 'sep': sep,
+                        }
+                        if shared_params is None:
+                            shared_params = params
+                        elif (params['order'] != shared_params['order'] or
+                              params['sep'] != shared_params['sep']):
+                            all_ok = False
+                        found = True
+                        break
+                if found:
+                    break
+            if not found:
+                all_ok = False
+                break
+
+        if all_ok and shared_params is not None:
+            prog = SearchProgram(
+                steps=[SearchStep('object_grid_pack', shared_params)],
+                provenance='derive:object_grid_pack',
+            )
+            if prog.verify(demos):
+                return [prog]
+
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2m: Panel legend map
+# ---------------------------------------------------------------------------
+
+def _derive_panel_legend_map(all_facts, demos):
+    """Detect a legend panel and derive a color mapping to apply to the target panel.
+
+    Looks for a single-row or single-col separator splitting the grid into
+    a small legend region and a larger target region. Derives color mapping
+    from legend entries that generalizes across all demos.
+    """
+    from aria.guided.perceive import perceive
+
+    for di, (inp, out) in enumerate(demos):
+        facts = all_facts[di]
+        if not facts.separators:
+            return []
+
+    # Try each separator as a panel boundary
+    first_facts = all_facts[0]
+    for sep in first_facts.separators:
+        axis = sep.axis
+        idx = sep.index
+        rows, cols = demos[0][0].shape
+
+        if axis == 'row':
+            # Split top/bottom
+            for legend_side in ('top', 'bottom'):
+                mapping = _try_legend_mapping(
+                    all_facts, demos, axis, idx, legend_side)
+                if mapping is not None:
+                    params = {
+                        'axis': axis, 'sep_idx': idx,
+                        'legend_side': legend_side, 'mapping': mapping,
+                    }
+                    prog = SearchProgram(
+                        steps=[SearchStep('panel_legend_map', params)],
+                        provenance='derive:panel_legend_map',
+                    )
+                    if prog.verify(demos):
+                        return [prog]
+        elif axis == 'col':
+            for legend_side in ('left', 'right'):
+                mapping = _try_legend_mapping(
+                    all_facts, demos, axis, idx, legend_side)
+                if mapping is not None:
+                    params = {
+                        'axis': axis, 'sep_idx': idx,
+                        'legend_side': legend_side, 'mapping': mapping,
+                    }
+                    prog = SearchProgram(
+                        steps=[SearchStep('panel_legend_map', params)],
+                        provenance='derive:panel_legend_map',
+                    )
+                    if prog.verify(demos):
+                        return [prog]
+
+    return []
+
+
+def _try_legend_mapping(all_facts, demos, axis, sep_idx, legend_side):
+    """Try to derive a consistent color mapping from legend→target across demos."""
+    mappings = []
+    for di, (inp, out) in enumerate(demos):
+        bg = all_facts[di].bg
+        if axis == 'col':
+            if legend_side == 'left':
+                legend = inp[:, :sep_idx]
+                target_in = inp[:, sep_idx + 1:]
+                target_out = out[:, sep_idx + 1:]
+            else:
+                legend = inp[:, sep_idx + 1:]
+                target_in = inp[:, :sep_idx]
+                target_out = out[:, :sep_idx]
+        else:
+            if legend_side == 'top':
+                legend = inp[:sep_idx, :]
+                target_in = inp[sep_idx + 1:, :]
+                target_out = out[sep_idx + 1:, :]
+            else:
+                legend = inp[sep_idx + 1:, :]
+                target_in = inp[:sep_idx, :]
+                target_out = out[:sep_idx, :]
+
+        if legend.size == 0 or target_in.size == 0:
+            return None
+        if target_in.shape != target_out.shape:
+            return None
+
+        # Legend must be smaller than target
+        if legend.size >= target_in.size:
+            return None
+
+        # Derive per-pixel color mapping from target_in → target_out
+        dm = {}
+        diff_mask = target_in != target_out
+        if not np.any(diff_mask):
+            continue  # No change — mapping is identity
+        for r in range(target_in.shape[0]):
+            for c in range(target_in.shape[1]):
+                if target_in[r, c] != target_out[r, c]:
+                    src_c = int(target_in[r, c])
+                    tgt_c = int(target_out[r, c])
+                    if src_c in dm and dm[src_c] != tgt_c:
+                        return None  # Inconsistent mapping
+                    dm[src_c] = tgt_c
+
+        # Verify mapping colors appear in legend
+        legend_colors = set(int(x) for x in legend.flat if x != bg)
+        for tgt_c in dm.values():
+            if tgt_c != bg and tgt_c not in legend_colors:
+                return None  # Target color not in legend
+
+        mappings.append(dm)
+
+    if not mappings:
+        return None
+
+    # All demos must agree on mapping
+    base = mappings[0]
+    for m in mappings[1:]:
+        for k, v in m.items():
+            if k in base and base[k] != v:
+                return None
+            base[k] = v
+
+    return {str(k): v for k, v in base.items()} if base else None
 
 
 # ---------------------------------------------------------------------------

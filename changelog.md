@@ -61,6 +61,7 @@
 - added separator/implicit grid detection (`grid_detect.py`) and `grid_fill_between` strategy: fills empty grid cells between same-color blocks or identical cell patterns along rows/cols; implicit grids are inferred from repeated object lattices; added `fill_all` mode to fill all empty cells with the dominant template; `06df4c85` now solves via derive
 - added `grid_cell_pack` strategy: packs non-empty grid-cell contents into row/col/color order within the detected grid
 - added `grid_slot_transfer` strategy: moves grid cell contents into empty slots using nearest assignment (separator or implicit grids)
+- quarantined mid-level benchmark-shaped derive strategies from default routing (marker_stamp, anomaly_halo, cavity_transfer, cross_stencil_recolor, diagonal_collision_trace, separator_motif_broadcast, line_arith_broadcast, barrier_port_transfer, legend_frame_fill); kept only for macro/replay use
 - added `grid_slot_transfer` strategy: moves cell contents from occupied source cells to empty target cells in a detected grid using Hungarian assignment for matching; handles both separator and implicit grids
 - consolidation refresh: v1-train 45/400 (up from 34), v2-eval 11/120; 11 new v1-train solves including `228f6490` (registration_transfer), plus cumulative crop/stencil/recolor gains
 
