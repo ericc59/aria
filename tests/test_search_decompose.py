@@ -70,8 +70,7 @@ def test_recolor_only_suppresses_spatial():
     names = [s.name for s in splitters]
     assert not any('crop' in n for n in names)
     assert not any('panel' in n for n in names)
-    # Should have color_map splitter
-    assert any('color_map' in n for n in names)
+    assert not any('transform' in n for n in names)
 
 
 def test_extraction_enables_crop():
@@ -157,5 +156,56 @@ def test_splitter_count():
 
     analysis = analyze_task([(inp, out)])
     splitters = _build_splitters(analysis)
-    # Should have crop + panel + legend + remove_color + color_map
+    # crop + panel×3 + legend + remove_color + crop_unique_color
     assert len(splitters) >= 5, f"Only {len(splitters)} splitters: {[s.name for s in splitters]}"
+
+
+def test_apply_color_map_pruned():
+    """apply_color_map splitter was pruned — should not appear."""
+    inp = np.array([[1, 2], [2, 1]], dtype=np.int8)
+    out = np.array([[1, 0], [0, 1]], dtype=np.int8)
+
+    analysis = analyze_task([(inp, out)])
+    splitters = _build_splitters(analysis)
+    names = [s.name for s in splitters]
+    assert 'apply_color_map' not in names
+
+
+def test_rot90_rot270_pruned():
+    """rot90/rot270 were pruned from same_dims transforms."""
+    inp = np.array([[1, 0, 2], [0, 0, 0], [3, 0, 4]], dtype=np.int8)
+    out = np.array([[3, 0, 1], [0, 0, 0], [4, 0, 2]], dtype=np.int8)
+
+    analysis = analyze_task([(inp, out)])
+    splitters = _build_splitters(analysis)
+    names = [s.name for s in splitters]
+    assert 'apply_transform_rot90' not in names
+    assert 'apply_transform_rot270' not in names
+    # flip_h/flip_v/rot180 should still be present
+    assert 'apply_transform_flip_h' in names
+
+
+def test_crop_unique_color_splitter():
+    """crop_object_unique_color extracts the uniquely-colored object."""
+    from aria.search.decompose import _apply_crop_unique_color
+
+    inp = np.zeros((6, 6), dtype=np.int8)
+    inp[0:2, 0:2] = 1  # object of color 1
+    inp[0:2, 4:6] = 1  # another object of color 1
+    inp[4:6, 0:3] = 7  # unique color 7
+
+    result = _apply_crop_unique_color(inp)
+    assert result.shape == (2, 3)
+    assert (result == 7).all()
+
+
+def test_crop_unique_color_in_splitters():
+    """crop_object_unique_color should appear for dims_change tasks."""
+    inp = np.zeros((5, 5), dtype=np.int8)
+    inp[1:3, 1:3] = 1
+
+    analysis = analyze_task([(inp, np.zeros((2, 2), dtype=np.int8))])
+    assert analysis.dims_change
+    splitters = _build_splitters(analysis)
+    names = [s.name for s in splitters]
+    assert 'crop_object_unique_color' in names

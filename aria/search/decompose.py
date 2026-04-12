@@ -54,7 +54,7 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
     # --- Panel splitters (has_panels or has_separators) ---
 
     if analysis.has_panels or analysis.has_separators:
-        for idx in range(4):
+        for idx in range(3):
             splitters.append(Splitter(
                 name=f'extract_panel_{idx}',
                 apply=lambda inp, i=idx: _apply_extract_panel(inp, i),
@@ -91,29 +91,18 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
             compatible=lambda a: True,
         ))
 
-    # Apply consistent color map (gated: has removed_colors)
-    if analysis.removed_colors:
-        cmap = {int(c): 0 for c in analysis.removed_colors if c != 0}
-        if cmap:
-            splitters.append(Splitter(
-                name='apply_color_map',
-                apply=lambda inp, m=cmap: _apply_color_map_dict(inp, m),
-                program=SearchProgram(
-                    steps=[SearchStep('recolor_map', {'color_map': cmap})],
-                    provenance='splitter:apply_color_map',
-                ),
-                compatible=lambda a: bool(a.removed_colors),
-            ))
+    # NOTE: apply_color_map pruned — redundant with remove_color_c splitters
+    # and had a bg=0 invariant mismatch.
 
     # --- Transform splitters (same_dims + rearrange or mixed) ---
+    # Only flip_h, flip_v, rot180 preserve dims. rot90/rot270 change dims
+    # so they're always identity-rejected under same_dims gating.
 
     if analysis.same_dims and analysis.diff_type in ('rearrange', 'mixed'):
         for xform_name, xfn in [
             ('flip_h', lambda g: g[:, ::-1]),
             ('flip_v', lambda g: g[::-1, :]),
-            ('rot90', lambda g: np.rot90(g)),
             ('rot180', lambda g: np.rot90(g, 2)),
-            ('rot270', lambda g: np.rot90(g, 3)),
         ]:
             splitters.append(Splitter(
                 name=f'apply_transform_{xform_name}',
@@ -142,6 +131,19 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
                 ),
                 compatible=lambda a: a.diff_type in ('subtractive', 'mixed'),
             ))
+
+    # --- Extraction by unique-color object (dims_change or extraction) ---
+
+    if analysis.dims_change or analysis.is_extraction:
+        splitters.append(Splitter(
+            name='crop_object_unique_color',
+            apply=_apply_crop_unique_color,
+            program=SearchProgram(
+                steps=[SearchStep('crop_object', {'predicate': 'unique_color'})],
+                provenance='splitter:crop_object_unique_color',
+            ),
+            compatible=lambda a: a.dims_change or a.is_extraction,
+        ))
 
     return splitters
 
@@ -183,8 +185,8 @@ def search_decomposed(
             if mid.shape == inp.shape and np.array_equal(mid, inp):
                 ok = False
                 break
-            # Reject invalid grids (negative values, wrong dtype)
-            if hasattr(mid, 'min') and int(mid.min()) < 0:
+            # Reject invalid grids (empty, negative values, wrong dtype)
+            if mid.size == 0 or (hasattr(mid, 'min') and int(mid.min()) < 0):
                 ok = False
                 break
             sub_demos.append((mid, out))
@@ -313,3 +315,17 @@ def _apply_remove_objects(inp, selector_name):
                 if obj.mask[r, c]:
                     result[obj.row + r, obj.col + c] = bg
     return result
+
+
+def _apply_crop_unique_color(inp):
+    """Crop to the bounding box of the object with a unique color."""
+    from aria.guided.perceive import perceive
+    from collections import Counter
+
+    facts = perceive(inp)
+    color_counts = Counter(o.color for o in facts.objects)
+    unique = [o for o in facts.objects if color_counts[o.color] == 1]
+    if len(unique) != 1:
+        return inp  # identity → rejected by splitter loop
+    obj = unique[0]
+    return inp[obj.row:obj.row + obj.height, obj.col:obj.col + obj.width].copy()

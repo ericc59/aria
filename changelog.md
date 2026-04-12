@@ -1,5 +1,6 @@
 ## 2026-04-12
 
+- refined decomposer splitters: pruned `apply_color_map` (redundant with remove_color), pruned `rot90`/`rot270` (change dims under same_dims gate), reduced panel indices 4→3; added `crop_object_unique_color` (crops to bbox of the single unique-color object)
 - added `_derive_rank_recolor_expr`: single-step rank→color recolor via `ParamExpr('lookup', ('_rank_by_size', table))`; replaces N per-group recolor steps with one lookup expression
 - added `_derive_field_move_expr`: per-color variable-offset move via `ParamExpr('lookup', ('color', dr_table/dc_table))`; derives color→offset tables from demos
 - extended `eval_param_expr` lookup op to handle `_rank_by_size` virtual field (computes rank at eval time)
