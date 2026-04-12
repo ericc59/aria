@@ -3,6 +3,13 @@
 Replaces brute-force N-step composition with a structured planner
 that applies compatible splitters, then runs derive on the sub-problem.
 Max depth 3 (splitter + sub-splitter + leaf derive).
+
+Gating rules (keep decomposition tractable):
+  - Spatial splitters (crop, extract) only for dims_change or is_extraction.
+  - Color splitters only when removed_colors or diff_type == 'recolor_only'.
+  - Transform splitters only for same_dims + rearrange or mixed.
+  - Object-removal splitters only for subtractive or mixed.
+  - Panel splitters only when has_panels or has_separators.
 """
 
 from __future__ import annotations
@@ -25,10 +32,14 @@ class Splitter:
 
 
 def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
-    """Build the set of compatible splitters for this task."""
+    """Build the set of compatible splitters for this task.
+
+    Each splitter is gated by analysis fields to avoid wasted search.
+    """
     splitters = []
 
-    # crop_non_bg_bbox: extract bounding box of non-bg content
+    # --- Spatial / extraction splitters (dims_change or extraction) ---
+
     if analysis.is_extraction or analysis.dims_change:
         splitters.append(Splitter(
             name='crop_non_bg_bbox',
@@ -40,7 +51,35 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
             compatible=lambda a: a.is_extraction or a.dims_change,
         ))
 
-    # remove_color_c: zero out a specific color
+    # --- Panel splitters (has_panels or has_separators) ---
+
+    if analysis.has_panels or analysis.has_separators:
+        # Extract each panel by index
+        for idx in range(4):  # up to 4 panels
+            splitters.append(Splitter(
+                name=f'extract_panel_{idx}',
+                apply=lambda inp, i=idx: _apply_extract_panel(inp, i),
+                program=SearchProgram(
+                    steps=[SearchStep('crop_fixed', {'panel_idx': idx})],
+                    provenance=f'splitter:extract_panel_{idx}',
+                ),
+                compatible=lambda a: a.has_panels or a.has_separators,
+            ))
+
+        # Extract legend region (smallest panel)
+        splitters.append(Splitter(
+            name='extract_legend_region',
+            apply=_apply_extract_legend_region,
+            program=SearchProgram(
+                steps=[SearchStep('crop_fixed', {'legend': True})],
+                provenance='splitter:extract_legend_region',
+            ),
+            compatible=lambda a: a.has_panels or a.has_separators,
+        ))
+
+    # --- Color splitters ---
+
+    # Remove specific colors (gated: only when colors actually disappear)
     for c in analysis.removed_colors:
         if c == 0:
             continue
@@ -54,19 +93,65 @@ def _build_splitters(analysis: TaskAnalysis) -> list[Splitter]:
             compatible=lambda a: True,
         ))
 
-    # extract_panel_0: extract first panel region
-    if analysis.has_panels:
+    # Apply consistent color map (gated: recolor_only or has new+removed colors)
+    if (analysis.diff_type == 'recolor_only' or
+            (analysis.new_colors and analysis.removed_colors)):
         splitters.append(Splitter(
-            name='extract_panel_0',
-            apply=_apply_extract_panel_0,
+            name='apply_color_map',
+            apply=lambda inp: _apply_derived_color_map(inp, analysis),
             program=SearchProgram(
-                steps=[SearchStep('crop_fixed', {'r0': 0, 'c0': 0, 'h': 1, 'w': 1})],
-                provenance='splitter:extract_panel_0',
+                steps=[SearchStep('recolor_map', {})],
+                provenance='splitter:apply_color_map',
             ),
-            compatible=lambda a: a.has_panels,
+            compatible=lambda a: (a.diff_type == 'recolor_only' or
+                                  bool(a.new_colors and a.removed_colors)),
         ))
 
+    # --- Transform splitters (same_dims + rearrange or mixed) ---
+
+    if analysis.same_dims and analysis.diff_type in ('rearrange', 'mixed'):
+        for xform_name, xfn in [
+            ('flip_h', lambda g: g[:, ::-1]),
+            ('flip_v', lambda g: g[::-1, :]),
+            ('rot90', lambda g: np.rot90(g)),
+            ('rot180', lambda g: np.rot90(g, 2)),
+            ('rot270', lambda g: np.rot90(g, 3)),
+        ]:
+            splitters.append(Splitter(
+                name=f'apply_transform_{xform_name}',
+                apply=lambda inp, fn=xfn: fn(inp).copy(),
+                program=SearchProgram(
+                    steps=[SearchStep('transform', {'xform': xform_name})],
+                    provenance=f'splitter:apply_transform_{xform_name}',
+                ),
+                compatible=lambda a: a.same_dims and a.diff_type in ('rearrange', 'mixed'),
+            ))
+
+    # --- Object-removal splitters (subtractive or mixed) ---
+
+    if analysis.diff_type in ('subtractive', 'mixed'):
+        for sel_name, sel_desc in [
+            ('largest', 'remove largest object'),
+            ('smallest', 'remove smallest object'),
+            ('touches_border', 'remove border-touching objects'),
+        ]:
+            splitters.append(Splitter(
+                name=f'remove_objects_{sel_name}',
+                apply=lambda inp, s=sel_name: _apply_remove_objects(inp, s),
+                program=SearchProgram(
+                    steps=[SearchStep('remove', {}, _sel_from_name(sel_name))],
+                    provenance=f'splitter:remove_objects_{sel_name}',
+                ),
+                compatible=lambda a: a.diff_type in ('subtractive', 'mixed'),
+            ))
+
     return splitters
+
+
+def _sel_from_name(name):
+    """Build a StepSelect from a selector name."""
+    from aria.search.sketch import StepSelect
+    return StepSelect(role=name)
 
 
 def search_decomposed(
@@ -89,7 +174,6 @@ def search_decomposed(
     splitters = _build_splitters(analysis)
 
     for splitter in splitters:
-        # Apply splitter to all demo inputs
         sub_demos = []
         ok = True
         for inp, out in demos:
@@ -99,6 +183,10 @@ def search_decomposed(
                 ok = False
                 break
             if mid.shape == inp.shape and np.array_equal(mid, inp):
+                ok = False
+                break
+            # Reject invalid grids (negative values, wrong dtype)
+            if hasattr(mid, 'min') and int(mid.min()) < 0:
                 ok = False
                 break
             sub_demos.append((mid, out))
@@ -155,11 +243,63 @@ def _apply_remove_color(inp, color):
     return result
 
 
-def _apply_extract_panel_0(inp):
-    """Extract the first (top-left) panel region."""
+def _apply_extract_panel(inp, index):
+    """Extract a panel region by index."""
     from aria.guided.perceive import perceive
     facts = perceive(inp)
-    if not facts.regions:
-        return inp
-    r = facts.regions[0]
+    if not facts.regions or index >= len(facts.regions):
+        return inp  # unchanged → will be rejected by the identity check
+    r = facts.regions[index]
     return inp[r.r0:r.r1, r.c0:r.c1].copy()
+
+
+def _apply_extract_legend_region(inp):
+    """Extract the smallest panel region (likely the legend)."""
+    from aria.guided.perceive import perceive
+    facts = perceive(inp)
+    if not facts.regions or len(facts.regions) < 2:
+        return inp
+    smallest = min(facts.regions,
+                   key=lambda r: (r.r1 - r.r0) * (r.c1 - r.c0))
+    return inp[smallest.r0:smallest.r1, smallest.c0:smallest.c1].copy()
+
+
+def _apply_derived_color_map(inp, analysis):
+    """Apply a simple color map: removed_colors → bg, or new_colors inference."""
+    result = inp.copy()
+    # Map each removed color to bg
+    for c in analysis.removed_colors:
+        if c != 0:
+            result[result == c] = 0
+    return result
+
+
+def _apply_remove_objects(inp, selector_name):
+    """Remove objects matching a structural selector."""
+    from aria.guided.perceive import perceive
+    from aria.guided.dsl import prim_select
+    from aria.guided.clause import Predicate, Pred
+
+    facts = perceive(inp)
+    bg = facts.bg
+
+    name_to_pred = {
+        'largest': Pred.IS_LARGEST,
+        'smallest': Pred.IS_SMALLEST,
+        'touches_border': Pred.TOUCHES_BORDER,
+    }
+    pred = name_to_pred.get(selector_name)
+    if pred is None:
+        return inp
+
+    targets = prim_select(facts, [Predicate(pred)])
+    if not targets:
+        return inp
+
+    result = inp.copy()
+    for obj in targets:
+        for r in range(obj.height):
+            for c in range(obj.width):
+                if obj.mask[r, c]:
+                    result[obj.row + r, obj.col + c] = bg
+    return result

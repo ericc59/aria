@@ -117,14 +117,17 @@ def _classify_diff_type(demos, same_dims):
         if Counter(inp.flat) != Counter(out.flat):
             rearrange = False
 
+    # Both rearrange and recolor can be true (same mask + same multiset).
+    # Distinguish: if multiset is preserved, it's rearrange (values moved).
+    # If multiset changed but mask didn't, it's recolor_only.
+    if rearrange:
+        return 'rearrange'
     if recolor:
         return 'recolor_only'
     if additive:
         return 'additive'
     if subtractive:
         return 'subtractive'
-    if rearrange:
-        return 'rearrange'
     return 'mixed'
 
 
