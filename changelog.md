@@ -1,5 +1,6 @@
 ## 2026-04-12
 
+- added `correspondence_transfer` strategy: correspondence-driven object placement for swap patterns; supports position swaps within same-shape groups (Hungarian assignment) and explicit color permutations (mapping stored in params) verified across demos
 - upgraded `grid_slot_transfer` with tiered feature matching: exact content (cost 0) → near-shape mask overlap ≥0.5 (cost 1-10) → spatial distance (cost 20+) → incompatible (cost 1e6); deduplicated derive and exec definitions
 - added `grid_conditional_transfer`: fills empty grid cells using verified row/col/mirror rules; four rule candidates (nearest_row, nearest_col, mirror_h, mirror_v) tested across all demos
 - added `object_grid_pack`: packs input objects into output grid by ordering (row_major, size_asc, size_desc, color_asc); auto-infers grid dims and separator from output shape; works with different input/output sizes

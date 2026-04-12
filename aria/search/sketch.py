@@ -250,6 +250,8 @@ class SearchProgram:
                 result = _exec_object_grid_pack(result, step)
             elif step.action == 'panel_legend_map':
                 result = _exec_panel_legend_map(result, step)
+            elif step.action == 'correspondence_transfer':
+                result = _exec_correspondence_transfer(result, step)
             elif step.action == 'registration_anchor_transfer':
                 result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
@@ -745,6 +747,87 @@ def _exec_grid_conditional_transfer(inp, step):
     return result
 
 
+def _exec_correspondence_transfer(inp, step):
+    """Place objects via correspondence-derived rules."""
+    from aria.guided.perceive import perceive
+
+    facts = perceive(inp)
+    bg = facts.bg
+    params = step.params or {}
+    mode = params.get('mode', 'position_swap')
+
+    if mode == 'color_permutation':
+        return _exec_corr_color_permutation(inp, params)
+    if mode == 'position_swap':
+        return _exec_corr_position_swap(inp, facts, bg)
+    return inp
+
+
+def _exec_corr_color_permutation(inp, params):
+    """Apply a global color permutation mapping."""
+    mapping = params.get('mapping', {})
+    if not mapping:
+        return inp
+    orig = inp.copy()
+    result = inp.copy()
+    # Apply mapping against the original grid to avoid overwrite collisions.
+    for k, v in mapping.items():
+        result[orig == int(k)] = int(v)
+    return result
+
+
+def _exec_corr_position_swap(inp, facts, bg):
+    """Permute object positions among same-shape groups."""
+    from scipy.optimize import linear_sum_assignment
+
+    objs = [o for o in facts.objects if o.size >= 2]
+    if len(objs) < 2:
+        return inp
+
+    result = inp.copy()
+    # Group by shape signature (height, width, size)
+    groups = {}
+    for o in objs:
+        key = (o.height, o.width, o.size)
+        groups.setdefault(key, []).append(o)
+
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        n = len(group)
+        positions = [(o.row, o.col) for o in group]
+        cost = np.full((n, n), 1e6, dtype=float)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                cost[i, j] = abs(positions[i][0] - positions[j][0]) + \
+                             abs(positions[i][1] - positions[j][1])
+
+        rows, cols = linear_sum_assignment(cost)
+        if any(cost[r, c] >= 1e6 for r, c in zip(rows, cols)):
+            return inp
+
+        for o in group:
+            for r in range(o.height):
+                for c in range(o.width):
+                    if o.mask[r, c]:
+                        result[o.row + r, o.col + c] = bg
+
+        for i, j in zip(rows, cols):
+            src = group[i]
+            dst_row, dst_col = positions[j]
+            for r in range(src.height):
+                for c in range(src.width):
+                    if src.mask[r, c]:
+                        nr = dst_row + r
+                        nc = dst_col + c
+                        if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                            result[nr, nc] = src.color
+
+    return result
+
+
 def _exec_object_grid_pack(inp, step):
     """Pack input objects into an output grid by ordering.
 
@@ -1199,7 +1282,8 @@ def _step_to_ast(step: SearchStep) -> ASTNode:
     if action in ('crop_nonbg', 'crop_object', 'crop_fixed', 'color_stencil',
                   'registration_transfer', 'grid_fill_between',
                   'grid_slot_transfer', 'grid_conditional_transfer',
-                  'object_grid_pack', 'panel_legend_map'):
+                  'object_grid_pack', 'panel_legend_map',
+                  'correspondence_transfer'):
         # These ops don't lower to AST — executed directly in SearchProgram.execute
         return ASTNode(Op.INPUT)
 

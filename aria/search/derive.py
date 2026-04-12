@@ -161,6 +161,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_panel_legend_map(all_facts, demos)
         results.extend(progs)
 
+    # Strategy 2n: Correspondence transfer (per-object variable placement)
+    if not results:
+        progs = _derive_correspondence_transfer(all_transitions, all_facts, demos)
+        results.extend(progs)
+
     # Strategy 3: Stamp/creation (new objects from input object shapes)
     progs = _derive_stamp(all_transitions, all_facts, demos)
     results.extend(progs)
@@ -2092,6 +2097,124 @@ def _apply_simple_rule(rule, gr, gc, g, content_map):
     elif rule == 'mirror_v':
         return content_map.get((g.n_rows - 1 - gr, gc))
     return None
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2n: Correspondence transfer (per-object variable placement)
+# ---------------------------------------------------------------------------
+
+def _derive_correspondence_transfer(all_transitions, all_facts, demos):
+    """Derive per-object placement from correspondence swaps.
+
+    Two cases:
+    1) Color permutation (recolored objects with a non-identity permutation).
+    2) Position swap (bijective permutation of positions among same-shape objects).
+    """
+    color_map = _try_correspondence_color_permutation(all_transitions)
+    if color_map:
+        prog = SearchProgram(
+            steps=[SearchStep('correspondence_transfer',
+                              {'mode': 'color_permutation', 'mapping': color_map})],
+            provenance='derive:correspondence_transfer',
+        )
+        if prog.verify(demos):
+            return [prog]
+
+    if _try_correspondence_position_swap(all_facts, demos):
+        prog = SearchProgram(
+            steps=[SearchStep('correspondence_transfer', {'mode': 'position_swap'})],
+            provenance='derive:correspondence_transfer',
+        )
+        if prog.verify(demos):
+            return [prog]
+
+    return []
+
+
+def _try_correspondence_color_permutation(all_transitions):
+    """Return a consistent non-identity color permutation if present."""
+    mapping = {}
+    for demo_trans in all_transitions:
+        recolored = [t for t in demo_trans if t.match_type == 'recolored' and t.in_obj]
+        if len(recolored) < 2:
+            return None
+        demo_map = {t.color_from: t.color_to for t in recolored}
+        if set(demo_map.keys()) != set(demo_map.values()):
+            return None
+        if all(k == v for k, v in demo_map.items()):
+            return None
+        for k, v in demo_map.items():
+            if k in mapping and mapping[k] != v:
+                return None
+            mapping[k] = v
+    return {str(k): int(v) for k, v in mapping.items()} if mapping else None
+
+
+def _apply_position_swap(grid, facts):
+    """Apply a position swap within same-shape groups."""
+    from scipy.optimize import linear_sum_assignment
+    bg = facts.bg
+    objs = [o for o in facts.objects if o.size >= 2]
+    if len(objs) < 2:
+        return grid
+
+    groups = {}
+    for o in objs:
+        key = (o.height, o.width, o.size)
+        groups.setdefault(key, []).append(o)
+
+    result = grid.copy()
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+        n = len(group)
+        positions = [(o.row, o.col) for o in group]
+        cost = np.full((n, n), 1e6, dtype=float)
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                cost[i, j] = abs(positions[i][0] - positions[j][0]) + \
+                             abs(positions[i][1] - positions[j][1])
+        rows, cols = linear_sum_assignment(cost)
+        if any(cost[r, c] >= 1e6 for r, c in zip(rows, cols)):
+            return grid
+
+        # Clear group
+        for o in group:
+            for r in range(o.height):
+                for c in range(o.width):
+                    if o.mask[r, c]:
+                        result[o.row + r, o.col + c] = bg
+
+        # Place swapped
+        for i, j in zip(rows, cols):
+            src = group[i]
+            dst_row, dst_col = positions[j]
+            for r in range(src.height):
+                for c in range(src.width):
+                    if src.mask[r, c]:
+                        nr = dst_row + r
+                        nc = dst_col + c
+                        if 0 <= nr < result.shape[0] and 0 <= nc < result.shape[1]:
+                            result[nr, nc] = src.color
+
+    return result
+
+
+def _try_correspondence_position_swap(all_facts, demos):
+    """Return True if position swap matches all demos via shared logic."""
+    from aria.guided.perceive import perceive
+    any_changed = False
+    for inp, out in demos:
+        facts = perceive(inp)
+        cand = _apply_position_swap(inp, facts)
+        if not np.array_equal(cand, inp):
+            any_changed = True
+        if not np.array_equal(cand, out):
+            return False
+    return any_changed
+
 
 
 # ---------------------------------------------------------------------------
