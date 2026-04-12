@@ -600,14 +600,13 @@ def _exec_grid_cell_pack(inp, step):
 
 
 def _exec_grid_slot_transfer(inp, step):
-    """Move source cell contents into empty target cells via feature matching.
+    """Move source cell contents into empty target cells.
 
-    Tiers: exact content > near-shape (overlap >= 0.5) > spatial distance.
-    Hungarian assignment for multiple sources/targets.
+    Matching: size compatibility + spatial distance via Hungarian assignment.
+    Same rule as derive — no output-content dependency.
     """
     from aria.guided.perceive import perceive
     from aria.search.grid_detect import detect_grid, cell_content, cell_has_content
-    from aria.search.derive import _grid_cell_match_cost
     from scipy.optimize import linear_sum_assignment
 
     facts = perceive(inp)

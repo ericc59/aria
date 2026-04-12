@@ -1812,28 +1812,44 @@ def _derive_grid_slot_transfer(all_facts, demos):
         if not sources or not targets or len(sources) != len(targets):
             return []
 
-        # Feature-based matching
-        src_masks = [cell_content(inp, c, bg) for c in sources]
-        tgt_masks = [cell_content(out, c, bg) for c in targets]
-        n = len(sources)
-        cost = np.full((n, n), 1e6, dtype=float)
-        for si in range(n):
-            for ti in range(n):
-                cost[si, ti] = _grid_cell_match_cost(
-                    src_masks[si], tgt_masks[ti],
-                    sources[si], targets[ti], bg,
-                )
+        # Same matching rule as exec: size compatibility + spatial distance.
+        # No output-content dependency — derive must not peek at test outputs.
+        n_src = len(sources)
+        n_tgt = len(targets)
+        cost = np.full((n_src, n_tgt), 1e6, dtype=float)
+        src_contents = [cell_content(inp, c, bg) for c in sources]
+        for si in range(n_src):
+            sc = src_contents[si]
+            for ti in range(n_tgt):
+                tc = targets[ti]
+                if sc.shape[0] <= tc.height and sc.shape[1] <= tc.width:
+                    dist = abs(sources[si].r0 - tc.r0) + abs(sources[si].c0 - tc.c0)
+                    cost[si, ti] = dist
         rows, cols = linear_sum_assignment(cost)
         if any(cost[r, c] >= 1e6 for r, c in zip(rows, cols)):
+            return []
+
+        # Verify the assignment reproduces the output
+        result = inp.copy()
+        for cell in sources:
+            result[cell.r0:cell.r0 + cell.height,
+                   cell.c0:cell.c0 + cell.width] = bg
+        for si, ti in zip(rows, cols):
+            content = src_contents[si]
+            tgt = targets[ti]
+            h, w = content.shape
+            for r in range(h):
+                for c in range(w):
+                    if content[r, c] != bg:
+                        result[tgt.r0 + r, tgt.c0 + c] = content[r, c]
+        if not np.array_equal(result, out):
             return []
 
     prog = SearchProgram(
         steps=[SearchStep('grid_slot_transfer', {})],
         provenance='derive:grid_slot_transfer',
     )
-    if prog.verify(demos):
-        return [prog]
-    return []
+    return [prog]
 
 
 # ---------------------------------------------------------------------------
@@ -1868,6 +1884,17 @@ def _derive_grid_conditional_transfer(all_facts, demos):
             for cell in g.cells:
                 if cell_has_content(inp, cell, bg):
                     content_map[(cell.grid_row, cell.grid_col)] = cell_content(inp, cell, bg)
+
+            # Check: filled input cells must stay unchanged in output
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    inp_c = cell_content(inp, cell, bg)
+                    out_c = cell_content(out, cell, bg)
+                    if not np.array_equal(inp_c, out_c):
+                        all_ok = False
+                        break
+            if not all_ok:
+                break
 
             # Check: every empty input cell that has content in output
             # must match the rule prediction
@@ -2124,9 +2151,11 @@ def _try_legend_mapping(all_facts, demos, axis, sep_idx, legend_side):
                         return None  # Inconsistent mapping
                     dm[src_c] = tgt_c
 
-        # Verify mapping colors appear in legend
+        # Verify both source and target colors appear in legend
         legend_colors = set(int(x) for x in legend.flat if x != bg)
-        for tgt_c in dm.values():
+        for src_c, tgt_c in dm.items():
+            if src_c != bg and src_c not in legend_colors:
+                return None  # Source color not in legend
             if tgt_c != bg and tgt_c not in legend_colors:
                 return None  # Target color not in legend
 

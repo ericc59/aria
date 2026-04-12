@@ -81,3 +81,23 @@ def test_grid_conditional_derive_mirror_v():
     facts = [perceive(inp)]
     progs = _derive_grid_conditional_transfer(facts, demos)
     assert any(p.provenance == 'derive:grid_conditional_transfer' for p in progs)
+
+
+def test_grid_conditional_rejects_filled_cell_change():
+    """Derive must reject if a filled cell changes between input and output."""
+    from aria.search.derive import _derive_grid_conditional_transfer
+    from aria.guided.perceive import perceive
+
+    inp = np.zeros((5, 5), dtype=np.int8)
+    inp[2, :] = 5
+    inp[:, 2] = 5
+    inp[0:2, 0:2] = 3
+
+    out = inp.copy()
+    out[0:2, 3:5] = 3  # fill empty cell (valid)
+    out[0:2, 0:2] = 7  # mutate filled cell (invalid)
+
+    demos = [(inp, out)]
+    facts = [perceive(inp)]
+    progs = _derive_grid_conditional_transfer(facts, demos)
+    assert len(progs) == 0
