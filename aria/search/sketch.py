@@ -244,6 +244,8 @@ class SearchProgram:
                 result = _exec_grid_slot_transfer(result, step)
             elif step.action == 'grid_cell_pack':
                 result = _exec_grid_cell_pack(result, step)
+            elif step.action == 'grid_slot_transfer':
+                result = _exec_grid_slot_transfer(result, step)
             elif step.action == 'registration_anchor_transfer':
                 result = _exec_registration_anchor_transfer(result, step)
             elif step.action == 'quadrant_template_decode':
@@ -589,6 +591,59 @@ def _exec_grid_cell_pack(inp, step):
             result[cell.r0:cell.r0 + h,
                    cell.c0:cell.c0 + w] = content
             idx += 1
+
+    return result
+
+
+def _exec_grid_slot_transfer(inp, step):
+    """Move grid cell contents to empty slots using nearest assignment."""
+    from aria.guided.perceive import perceive
+    from aria.search.grid_detect import (
+        detect_grid, cell_content, cell_has_content,
+        assign_cells_by_nearest,
+    )
+
+    facts = perceive(inp)
+    grid_info = detect_grid(facts)
+    if grid_info is None:
+        return inp
+
+    bg = facts.bg
+    src_cells = []
+    tgt_cells = []
+    src_contents = []
+
+    for r in range(grid_info.n_rows):
+        for c in range(grid_info.n_cols):
+            cell = grid_info.cell_at(r, c)
+            if cell is None:
+                continue
+            has = cell_has_content(inp, cell, bg)
+            if has:
+                src_cells.append(cell)
+                src_contents.append(cell_content(inp, cell, bg))
+            else:
+                tgt_cells.append(cell)
+
+    assignment = assign_cells_by_nearest(src_cells, tgt_cells)
+    if assignment is None:
+        return inp
+
+    result = inp.copy()
+    # Clear sources
+    for cell in src_cells:
+        result[cell.r0:cell.r0 + cell.height,
+               cell.c0:cell.c0 + cell.width] = bg
+
+    # Place contents at assigned targets
+    for si, ti in assignment:
+        src_content = src_contents[si]
+        tgt_cell = tgt_cells[ti]
+        h, w = src_content.shape
+        if h > tgt_cell.height or w > tgt_cell.width:
+            return inp
+        result[tgt_cell.r0:tgt_cell.r0 + h,
+               tgt_cell.c0:tgt_cell.c0 + w] = src_content
 
     return result
 

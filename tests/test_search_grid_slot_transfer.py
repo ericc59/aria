@@ -1,4 +1,4 @@
-"""Tests for grid-slot transfer: modules placed into empty grid cells."""
+"""Tests for grid-slot transfer."""
 
 from __future__ import annotations
 
@@ -7,92 +7,65 @@ import numpy as np
 from aria.search.sketch import SearchProgram, SearchStep
 
 
-def test_grid_slot_transfer_separator_grid():
-    """Modules in a separator grid should transfer to empty cells."""
-    # 3x3 separator grid (seps at rows 3,6 and cols 3,6), cell size 3x3
-    grid = np.zeros((9, 9), dtype=np.int8)
-    grid[3, :] = 5
-    grid[6, :] = 5
-    grid[:, 3] = 5
-    grid[:, 6] = 5
-
-    # Source: content in cell (0,0)
-    grid[0:3, 0:3] = 2
-
-    # Expected: content moves from (0,0) to (2,2), source cleared
-    expected = grid.copy()
-    expected[0:3, 0:3] = 0  # clear source
-    expected[7:9, 7:9] = 2  # NOTE: cell (2,2) is rows 7-8, cols 7-8 (3x3 but last row is 3)
-
-    prog = SearchProgram(
-        steps=[SearchStep('grid_slot_transfer', {})],
-        provenance='test',
-    )
-    result = prog.execute(grid)
-
-    # The slot transfer should move content — verify source is cleared
-    # and SOME target cell now has the content
-    assert result[0, 0] == 0 or result[0, 0] == 2  # either moved or stayed
-    # At minimum, grid structure is preserved
-    assert result[3, 0] == 5  # separator preserved
-
-
-def test_grid_slot_transfer_implicit_grid():
-    """Modules in an implicit grid (no separators) should transfer."""
-    # 4 objects forming a 2x2 implicit grid with step=4
-    grid = np.zeros((8, 8), dtype=np.int8)
-    # 4 objects at (0,0), (0,4), (4,0), (4,4) — each 2x2
-    grid[0:2, 0:2] = 3  # occupied
-    grid[0:2, 4:6] = 3  # occupied
-    grid[4:6, 0:2] = 3  # occupied
-    grid[4:6, 4:6] = 3  # occupied (need 4 for implicit detection)
-
-    # Add a 5th object to ensure detection (min_objects=4 in detect_implicit_grid)
-    # Actually the 4 objects above should suffice since they have the same (h,w)
-
-    prog = SearchProgram(
-        steps=[SearchStep('grid_slot_transfer', {})],
-        provenance='test',
-    )
-    result = prog.execute(grid)
-    # With all cells occupied and no empty targets, nothing should move
-    assert np.array_equal(result, grid)
-
-
-def test_grid_slot_transfer_with_movement():
-    """Content should move from source cells to empty target cells."""
-    # 3x3 separator grid
-    grid = np.zeros((7, 7), dtype=np.int8)
+def test_grid_slot_transfer_separator():
+    """Separator grid: move top row contents to bottom row."""
+    grid = np.zeros((5, 5), dtype=np.int8)
     grid[2, :] = 5
-    grid[4, :] = 5
     grid[:, 2] = 5
-    grid[:, 4] = 5
-
-    # Content in cell (0,0): color 3
+    # top-left cell filled with 3s, top-right filled with 4s
     grid[0:2, 0:2] = 3
+    grid[0:2, 3:5] = 4
 
-    # Build a demo pair: content moves from (0,0) to (2,2)
-    out = grid.copy()
-    out[0:2, 0:2] = 0  # source cleared
-    out[5:7, 5:7] = 3  # placed in cell (2,2)
-
-    demos = [(grid, out)]
-
-    # Try derive
-    from aria.guided.perceive import perceive
-    from aria.search.derive import _derive_grid_slot_transfer
-
-    all_facts = [perceive(grid)]
-    progs = _derive_grid_slot_transfer(all_facts, demos)
-
-    if progs:
-        assert progs[0].verify(demos)
-    # Even without derive, execution should work
     prog = SearchProgram(
         steps=[SearchStep('grid_slot_transfer', {})],
         provenance='test',
     )
     result = prog.execute(grid)
-    # The transfer should at minimum clear the source
-    # (exact target depends on matching which uses L1 distance)
-    assert isinstance(result, np.ndarray)
+
+    # contents moved to bottom row cells
+    assert result[3:5, 0:2].sum() == 3 * 4
+    assert result[3:5, 3:5].sum() == 4 * 4
+    # source cells emptied
+    assert result[0:2, 0:2].sum() == 0
+    assert result[0:2, 3:5].sum() == 0
+
+
+def test_grid_slot_transfer_implicit():
+    """Implicit grid: move diagonal cells to the other diagonal."""
+    grid = np.zeros((4, 6), dtype=np.int8)
+    # cell size 2x3, positions (0,0),(0,3),(2,0),(2,3)
+    grid[0:2, 0:3] = 3
+    grid[2:4, 3:6] = 4
+
+    prog = SearchProgram(
+        steps=[SearchStep('grid_slot_transfer', {})],
+        provenance='test',
+    )
+    result = prog.execute(grid)
+
+    # contents should swap to the empty cells
+    assert result[2:4, 0:3].sum() == 3 * 6
+    assert result[0:2, 3:6].sum() == 4 * 6
+
+
+def test_grid_slot_transfer_derive():
+    """Derive should find grid_slot_transfer on a synthetic demo."""
+    from aria.search.derive import _derive_grid_slot_transfer
+    from aria.guided.perceive import perceive
+
+    inp = np.zeros((5, 5), dtype=np.int8)
+    inp[2, :] = 5
+    inp[:, 2] = 5
+    inp[0:2, 0:2] = 3
+    inp[0:2, 3:5] = 4
+
+    out = np.zeros((5, 5), dtype=np.int8)
+    out[2, :] = 5
+    out[:, 2] = 5
+    out[3:5, 0:2] = 3
+    out[3:5, 3:5] = 4
+
+    demos = [(inp, out)]
+    facts = [perceive(inp)]
+    progs = _derive_grid_slot_transfer(facts, demos)
+    assert any(p.provenance == 'derive:grid_slot_transfer' for p in progs)

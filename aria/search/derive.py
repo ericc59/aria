@@ -169,6 +169,11 @@ def derive_programs(demos: list[tuple[np.ndarray, np.ndarray]]) -> list[SearchPr
         progs = _derive_grid_cell_pack(all_facts, demos)
         results.extend(progs)
 
+    # Strategy 2j: Grid-slot transfer (move cell contents into empty slots)
+    if not results:
+        progs = _derive_grid_slot_transfer(all_facts, demos)
+        results.extend(progs)
+
     # Strategy 2j: Grid-slot transfer (modules placed into empty grid cells)
     if not results:
         progs = _derive_grid_slot_transfer(all_facts, demos)
@@ -1837,6 +1842,91 @@ def _derive_grid_slot_transfer(all_facts, demos):
     )
     if prog.verify(demos):
         return [prog]
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Strategy 2j: Grid-slot transfer
+# ---------------------------------------------------------------------------
+
+def _derive_grid_slot_transfer(all_facts, demos):
+    """Move non-empty grid cell contents into empty slots by nearest assignment."""
+    from aria.search.grid_detect import (
+        detect_grid, cell_content, cell_has_content,
+        assign_cells_by_nearest,
+    )
+
+    all_ok = True
+    for di, (inp, out) in enumerate(demos):
+        facts = all_facts[di]
+        grid_info = detect_grid(facts)
+        if grid_info is None:
+            all_ok = False
+            break
+
+        src_cells = []
+        tgt_cells = []
+        src_contents = []
+
+        for r in range(grid_info.n_rows):
+            for c in range(grid_info.n_cols):
+                cell = grid_info.cell_at(r, c)
+                if cell is None:
+                    continue
+                in_has = cell_has_content(inp, cell, facts.bg)
+                out_has = cell_has_content(out, cell, facts.bg)
+                if in_has and out_has:
+                    all_ok = False
+                    break
+                if not in_has and not out_has:
+                    continue
+                if in_has and not out_has:
+                    src_cells.append(cell)
+                    src_contents.append(cell_content(inp, cell, facts.bg))
+                elif not in_has and out_has:
+                    tgt_cells.append(cell)
+            if not all_ok:
+                break
+
+        if not all_ok:
+            break
+
+        if not src_cells or not tgt_cells:
+            all_ok = False
+            break
+
+        assignment = assign_cells_by_nearest(src_cells, tgt_cells)
+        if assignment is None:
+            all_ok = False
+            break
+
+        result = inp.copy()
+        for cell in src_cells:
+            result[cell.r0:cell.r0 + cell.height,
+                   cell.c0:cell.c0 + cell.width] = facts.bg
+
+        for si, ti in assignment:
+            src_content = src_contents[si]
+            tgt_cell = tgt_cells[ti]
+            h, w = src_content.shape
+            if h > tgt_cell.height or w > tgt_cell.width:
+                all_ok = False
+                break
+            result[tgt_cell.r0:tgt_cell.r0 + h,
+                   tgt_cell.c0:tgt_cell.c0 + w] = src_content
+
+        if not all_ok or not np.array_equal(result, out):
+            all_ok = False
+            break
+
+    if all_ok:
+        prog = SearchProgram(
+            steps=[SearchStep('grid_slot_transfer', {})],
+            provenance='derive:grid_slot_transfer',
+        )
+        if prog.verify(demos):
+            return [prog]
+
     return []
 
 

@@ -43,6 +43,40 @@ class DetectedGrid:
         return None
 
 
+def cell_center(cell: GridCell) -> tuple[float, float]:
+    return (cell.r0 + cell.height / 2.0, cell.c0 + cell.width / 2.0)
+
+
+def assign_cells_by_nearest(
+    sources: list[GridCell],
+    targets: list[GridCell],
+) -> list[tuple[int, int]] | None:
+    """Assign source cells to target cells by nearest centers.
+
+    Requires compatible cell sizes. Returns list of (src_idx, tgt_idx).
+    """
+    if not sources or not targets:
+        return None
+    if len(sources) > len(targets):
+        return None
+
+    cost = np.zeros((len(sources), len(targets)), dtype=float)
+    for si, src in enumerate(sources):
+        sr, sc = cell_center(src)
+        for ti, tgt in enumerate(targets):
+            if src.height != tgt.height or src.width != tgt.width:
+                cost[si, ti] = 1e6
+                continue
+            tr, tc = cell_center(tgt)
+            cost[si, ti] = abs(sr - tr) + abs(sc - tc)
+
+    from scipy.optimize import linear_sum_assignment
+    rows, cols = linear_sum_assignment(cost)
+    if any(cost[r, c] >= 1e6 for r, c in zip(rows, cols)):
+        return None
+    return list(zip(rows.tolist(), cols.tolist()))
+
+
 def detect_separator_grid(facts: GridFacts) -> DetectedGrid | None:
     """Detect a regular grid from row/col separators.
 
@@ -145,7 +179,7 @@ def _gcd_list(values: list[int]) -> int:
     return g
 
 
-def detect_implicit_grid(facts: GridFacts, *, min_objects: int = 4) -> DetectedGrid | None:
+def detect_implicit_grid(facts: GridFacts, *, min_objects: int = 2) -> DetectedGrid | None:
     """Detect a regular grid implied by repeated object placement.
 
     Uses the most common object (height, width) as the cell template,
