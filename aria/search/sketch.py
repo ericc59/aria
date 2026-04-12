@@ -724,6 +724,18 @@ def _exec_grid_conditional_transfer(inp, step):
         elif rule == 'mirror_v':
             mirror_r = g.n_rows - 1 - gr
             source = content_map.get((mirror_r, gc))
+        elif rule == 'induced':
+            from aria.search.derive import _CELL_MAPPINGS
+            cell_map = params.get('cell_map', 'mirror_h')
+            fn = _CELL_MAPPINGS.get(cell_map)
+            if fn:
+                src_r, src_c = fn(gr, gc, g.n_rows, g.n_cols)
+                source = content_map.get((src_r, src_c))
+        elif rule == 'parity_conditional':
+            from aria.search.derive import _apply_simple_rule
+            sub_rule = params.get('even_rule') if gr % 2 == 0 else params.get('odd_rule')
+            if sub_rule:
+                source = _apply_simple_rule(sub_rule, gr, gc, g, content_map)
 
         if source is not None:
             h = min(source.shape[0], cell.height)
@@ -734,42 +746,33 @@ def _exec_grid_conditional_transfer(inp, step):
 
 
 def _exec_object_grid_pack(inp, step):
-    """Pack input objects into an output grid ordered by row/col/size/color.
+    """Pack input objects into an output grid by ordering.
 
     step.params:
-      - 'order': 'size_asc', 'size_desc', 'color_asc', 'row_major' (default)
+      - 'order': 'row_major', 'col_major', 'size_asc', 'size_desc', 'color_asc'
       - 'out_rows', 'out_cols': output grid dimensions in objects
-      - 'cell_h', 'cell_w': cell size (auto-detected from largest object if missing)
+      - 'cell_h', 'cell_w': cell size
       - 'sep': separator width (default 0)
-      - 'bg': background color (auto-detected)
+      - 'placement': 'top_left' (default) or 'centered'
     """
     from aria.guided.perceive import perceive
+    from aria.search.derive import _sort_objects
 
     facts = perceive(inp)
     bg = facts.bg
     params = step.params or {}
     order = params.get('order', 'row_major')
     sep = params.get('sep', 0)
+    placement = params.get('placement', 'top_left')
 
     objs = [o for o in facts.objects if o.size > 0]
     if not objs:
         return inp
 
-    # Sort objects
-    if order == 'size_asc':
-        objs.sort(key=lambda o: (o.size, o.color))
-    elif order == 'size_desc':
-        objs.sort(key=lambda o: (-o.size, o.color))
-    elif order == 'color_asc':
-        objs.sort(key=lambda o: (o.color, -o.size))
-    else:  # row_major
-        objs.sort(key=lambda o: (o.row, o.col))
+    _sort_objects(objs, order)
 
-    # Extract masks
-    masks = []
-    for o in objs:
-        patch = inp[o.row:o.row + o.height, o.col:o.col + o.width].copy()
-        masks.append(patch)
+    patches = [inp[o.row:o.row + o.height, o.col:o.col + o.width].copy()
+               for o in objs]
 
     cell_h = params.get('cell_h', max(o.height for o in objs))
     cell_w = params.get('cell_w', max(o.width for o in objs))
@@ -780,7 +783,7 @@ def _exec_object_grid_pack(inp, step):
     total_w = out_cols * cell_w + max(0, out_cols - 1) * sep
     result = np.full((total_h, total_w), bg, dtype=inp.dtype)
 
-    for idx, patch in enumerate(masks):
+    for idx, patch in enumerate(patches):
         gr = idx // out_cols
         gc = idx % out_cols
         if gr >= out_rows:
@@ -790,7 +793,12 @@ def _exec_object_grid_pack(inp, step):
         ph, pw = patch.shape
         h = min(ph, cell_h)
         w = min(pw, cell_w)
-        result[r0:r0 + h, c0:c0 + w] = patch[:h, :w]
+        if placement == 'centered':
+            dr = (cell_h - h) // 2
+            dc = (cell_w - w) // 2
+            result[r0 + dr:r0 + dr + h, c0 + dc:c0 + dc + w] = patch[:h, :w]
+        else:
+            result[r0:r0 + h, c0:c0 + w] = patch[:h, :w]
 
     return result
 

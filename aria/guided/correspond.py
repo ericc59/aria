@@ -164,6 +164,25 @@ def _match_cost(out_obj, in_obj):
                               in_obj.width + out_obj.width) * 2:
                 return 15.0 + pos_dist * 0.5
 
+    # Feature-match tier: different color but similar shape/size.
+    # Mask IoU >= 0.5 OR perimeter similarity, size ratio >= 0.5.
+    # Catches recolored objects that also moved.
+    if not same_color and in_obj.size >= 2 and out_obj.size >= 2:
+        size_ratio = min(in_obj.size, out_obj.size) / max(in_obj.size, out_obj.size)
+        if size_ratio >= 0.5:
+            iou = _masks_overlap_iou(in_obj, out_obj)
+            if iou >= 0.5:
+                return 20.0 + (1.0 - iou) * 5
+            # No overlap — check mask shape similarity (perimeter ratio)
+            perim_a = _mask_perimeter(in_obj)
+            perim_b = _mask_perimeter(out_obj)
+            if perim_a > 0 and perim_b > 0:
+                perim_ratio = min(perim_a, perim_b) / max(perim_a, perim_b)
+                if perim_ratio >= 0.5:
+                    pos_dist = abs(in_obj.center_row - out_obj.center_row) + \
+                               abs(in_obj.center_col - out_obj.center_col)
+                    return 25.0 + pos_dist * 0.3
+
     # Modified (same color, overlapping)
     if same_color:
         iou = _masks_overlap_iou(in_obj, out_obj)
@@ -205,6 +224,20 @@ def _classify_match(out_obj, in_obj):
         size_ratio = min(in_obj.size, out_obj.size) / max(in_obj.size, out_obj.size)
         if size_ratio >= 0.5:
             return "moved", None
+
+    # Feature-match: different color, similar shape/size → moved_recolored
+    if not same_color and in_obj.size >= 2 and out_obj.size >= 2:
+        size_ratio = min(in_obj.size, out_obj.size) / max(in_obj.size, out_obj.size)
+        if size_ratio >= 0.5:
+            iou = _masks_overlap_iou(in_obj, out_obj)
+            if iou >= 0.5:
+                return "moved_recolored", None
+            perim_a = _mask_perimeter(in_obj)
+            perim_b = _mask_perimeter(out_obj)
+            if perim_a > 0 and perim_b > 0:
+                perim_ratio = min(perim_a, perim_b) / max(perim_a, perim_b)
+                if perim_ratio >= 0.5:
+                    return "moved_recolored", None
 
     if same_color:
         iou = _masks_overlap_iou(in_obj, out_obj)
@@ -453,3 +486,19 @@ def _masks_overlap_iou(a, b):
 
     union = a.size + b.size - intersection
     return intersection / union if union > 0 else 0.0
+
+
+def _mask_perimeter(obj):
+    """Count perimeter pixels (mask cells with at least one non-mask neighbor)."""
+    m = obj.mask
+    h, w = m.shape
+    count = 0
+    for r in range(h):
+        for c in range(w):
+            if not m[r, c]:
+                continue
+            if r == 0 or r == h - 1 or c == 0 or c == w - 1:
+                count += 1
+            elif not (m[r-1, c] and m[r+1, c] and m[r, c-1] and m[r, c+1]):
+                count += 1
+    return count

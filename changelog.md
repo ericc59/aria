@@ -5,6 +5,14 @@
 - added `object_grid_pack`: packs input objects into output grid by ordering (row_major, size_asc, size_desc, color_asc); auto-infers grid dims and separator from output shape; works with different input/output sizes
 - added `panel_legend_map`: detects legend panel split by separator, derives per-pixel color mapping from target changes, verifies legend colors appear in legend region; supports left/right/top/bottom legend placement
 - cleaned up duplicate `_derive_grid_slot_transfer` and `_exec_grid_slot_transfer` definitions from prior incomplete merges
+- strengthened `panel_legend_map` mapping validation: prefers deriving mapping from adjacent legend pairs (row-wise then column-wise) when legend is grid-like; falls back to target-diff with both source and target colors required in legend
+- added `_extract_legend_pairs`: scans legend rows/cols for exactly-2-non-bg-color pairs, returns consistent mapping or None
+- added feature-match tier to correspondence `_match_cost`: different-color objects with size ratio ≥ 0.5 and mask IoU ≥ 0.5 or perimeter similarity ≥ 0.5 get cost 20-30 (between near-shape and poor-match)
+- added `_mask_perimeter` helper for perimeter-based shape similarity in correspondence
+- updated `_classify_match` to label feature-matched pairs as `moved_recolored` instead of fallback
+- added grid-conditional rule induction: `_induce_grid_cell_rule` tries coordinate mappings (mirror_hv, parity-conditional composites) beyond the 4 hardcoded rules; `_grid_cell_facts` extracts row/col/parity/emptiness per cell
+- added `_CELL_MAPPINGS` dict with named coordinate transforms and `_apply_simple_rule` for exec dispatch
+- extended `object_grid_pack` with `col_major` ordering, common-size-mode cell size, and `centered` placement; refactored into `_sort_objects`, `_place_patch`, `_try_grid_pack` helpers
 
 ## 2026-04-10
 

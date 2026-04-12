@@ -1941,7 +1941,157 @@ def _derive_grid_conditional_transfer(all_facts, demos):
             if prog.verify(demos):
                 return [prog]
 
+    # Rule induction: try to learn a source-cell mapping from grid-cell facts
+    induced = _induce_grid_cell_rule(grids, all_facts, demos)
+    if induced is not None:
+        prog = SearchProgram(
+            steps=[SearchStep('grid_conditional_transfer', induced)],
+            provenance='derive:grid_conditional_transfer',
+        )
+        if prog.verify(demos):
+            return [prog]
+
     return []
+
+
+def _grid_cell_facts(cell, g, inp, bg):
+    """Extract facts for a single grid cell."""
+    from aria.search.grid_detect import cell_has_content, cell_content_color
+    return {
+        'row': cell.grid_row,
+        'col': cell.grid_col,
+        'row_parity': cell.grid_row % 2,
+        'col_parity': cell.grid_col % 2,
+        'is_empty': not cell_has_content(inp, cell, bg),
+        'dom_color': cell_content_color(inp, cell, bg),
+    }
+
+
+# Source-cell coordinate mappings: each maps (row, col, n_rows, n_cols)
+# to a candidate source (src_row, src_col).
+_CELL_MAPPINGS = {
+    'mirror_h':  lambda r, c, nr, nc: (r, nc - 1 - c),
+    'mirror_v':  lambda r, c, nr, nc: (nr - 1 - r, c),
+    'mirror_hv': lambda r, c, nr, nc: (nr - 1 - r, nc - 1 - c),
+    'same_row_parity_left': lambda r, c, nr, nc: (r, 0) if c % 2 == 0 else (r, 0),
+}
+
+
+def _induce_grid_cell_rule(grids, all_facts, demos):
+    """Try to find a coordinate-based rule mapping empty cells to source cells.
+
+    For each empty target cell, tries candidate source coordinates and checks
+    if the source cell content matches the expected output across all demos.
+    Returns params dict or None.
+    """
+    from aria.search.grid_detect import cell_content, cell_has_content
+
+    # Collect candidate mappings that work across all demos
+    # Try row-parity rules: "even-row empty cells copy from col X"
+    for name, fn in _CELL_MAPPINGS.items():
+        all_ok = True
+        for di, (inp, out) in enumerate(demos):
+            bg = all_facts[di].bg
+            g = grids[di]
+
+            # Verify filled cells stay unchanged
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    inp_c = cell_content(inp, cell, bg)
+                    out_c = cell_content(out, cell, bg)
+                    if not np.array_equal(inp_c, out_c):
+                        all_ok = False
+                        break
+            if not all_ok:
+                break
+
+            content_map = {}
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    content_map[(cell.grid_row, cell.grid_col)] = cell_content(inp, cell, bg)
+
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    continue
+                if not cell_has_content(out, cell, bg):
+                    continue
+                expected = cell_content(out, cell, bg)
+                src_r, src_c = fn(cell.grid_row, cell.grid_col, g.n_rows, g.n_cols)
+                predicted = content_map.get((src_r, src_c))
+                if predicted is None or predicted.shape != expected.shape:
+                    all_ok = False
+                    break
+                if not np.array_equal(predicted, expected):
+                    all_ok = False
+                    break
+            if not all_ok:
+                break
+
+        if all_ok:
+            return {'rule': 'induced', 'cell_map': name}
+
+    # Try parity-conditional rules: even rows → nearest in row, odd → mirror
+    for even_rule, odd_rule in [
+        ('nearest_row', 'mirror_h'),
+        ('mirror_h', 'nearest_row'),
+        ('nearest_col', 'mirror_v'),
+    ]:
+        all_ok = True
+        for di, (inp, out) in enumerate(demos):
+            bg = all_facts[di].bg
+            g = grids[di]
+            content_map = {}
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    content_map[(cell.grid_row, cell.grid_col)] = cell_content(inp, cell, bg)
+
+            for cell in g.cells:
+                if cell_has_content(inp, cell, bg):
+                    continue
+                if not cell_has_content(out, cell, bg):
+                    continue
+                expected = cell_content(out, cell, bg)
+                gr, gc = cell.grid_row, cell.grid_col
+                rule = even_rule if gr % 2 == 0 else odd_rule
+                predicted = _apply_simple_rule(rule, gr, gc, g, content_map)
+                if predicted is None or predicted.shape != expected.shape:
+                    all_ok = False
+                    break
+                if not np.array_equal(predicted, expected):
+                    all_ok = False
+                    break
+            if not all_ok:
+                break
+        if all_ok:
+            return {'rule': 'parity_conditional',
+                    'even_rule': even_rule, 'odd_rule': odd_rule}
+
+    return None
+
+
+def _apply_simple_rule(rule, gr, gc, g, content_map):
+    """Apply a named simple rule to find source content for (gr, gc)."""
+    if rule == 'nearest_row':
+        best_dist = float('inf')
+        result = None
+        for (r, c), cnt in content_map.items():
+            if r == gr and abs(c - gc) < best_dist:
+                best_dist = abs(c - gc)
+                result = cnt
+        return result
+    elif rule == 'nearest_col':
+        best_dist = float('inf')
+        result = None
+        for (r, c), cnt in content_map.items():
+            if c == gc and abs(r - gr) < best_dist:
+                best_dist = abs(r - gr)
+                result = cnt
+        return result
+    elif rule == 'mirror_h':
+        return content_map.get((gr, g.n_cols - 1 - gc))
+    elif rule == 'mirror_v':
+        return content_map.get((g.n_rows - 1 - gr, gc))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1955,15 +2105,75 @@ def _derive_object_grid_pack_prescan(demos):
     return _derive_object_grid_pack(all_facts, demos)
 
 
+def _sort_objects(objs, order):
+    """Sort objects by the given ordering."""
+    if order == 'size_asc':
+        objs.sort(key=lambda o: (o.size, o.color))
+    elif order == 'size_desc':
+        objs.sort(key=lambda o: (-o.size, o.color))
+    elif order == 'color_asc':
+        objs.sort(key=lambda o: (o.color, -o.size))
+    elif order == 'col_major':
+        objs.sort(key=lambda o: (o.col, o.row))
+    else:  # row_major
+        objs.sort(key=lambda o: (o.row, o.col))
+
+
+def _place_patch(candidate, patch, cell_h, cell_w, r0, c0, placement):
+    """Place a patch in a cell with the given placement rule."""
+    ph, pw = patch.shape
+    h = min(ph, cell_h)
+    w = min(pw, cell_w)
+    if placement == 'centered':
+        dr = (cell_h - h) // 2
+        dc = (cell_w - w) // 2
+        candidate[r0 + dr:r0 + dr + h, c0 + dc:c0 + dc + w] = patch[:h, :w]
+    else:  # top_left
+        candidate[r0:r0 + h, c0:c0 + w] = patch[:h, :w]
+
+
+def _try_grid_pack(objs, patches, bg, inp_dtype, out, cell_h, cell_w,
+                   sep, out_cols, out_rows, order, placement):
+    """Try a specific grid-pack configuration. Returns params or None."""
+    th = out_rows * cell_h + max(0, out_rows - 1) * sep
+    tw = out_cols * cell_w + max(0, out_cols - 1) * sep
+    out_h, out_w = out.shape
+    if th != out_h or tw != out_w:
+        return None
+
+    candidate = np.full((th, tw), bg, dtype=inp_dtype)
+    for idx, patch in enumerate(patches):
+        gr = idx // out_cols
+        gc = idx % out_cols
+        if gr >= out_rows:
+            break
+        r0 = gr * (cell_h + sep)
+        c0 = gc * (cell_w + sep)
+        _place_patch(candidate, patch, cell_h, cell_w, r0, c0, placement)
+
+    if np.array_equal(candidate, out):
+        return {
+            'order': order, 'cell_h': cell_h, 'cell_w': cell_w,
+            'out_rows': out_rows, 'out_cols': out_cols,
+            'sep': sep, 'placement': placement,
+        }
+    return None
+
+
 def _derive_object_grid_pack(all_facts, demos):
-    """Pack input objects into output grid by size/color/position order.
+    """Pack input objects into output grid by ordering.
 
-    Detects when the output is a regular arrangement of input object patches
-    in a new grid layout. Tries row_major, size_asc, size_desc, color_asc orderings.
+    Orderings: row_major, col_major, size_asc, size_desc, color_asc.
+    Cell size: max bbox (default) or common-size mode.
+    Placement: top_left or centered.
+    Sep: 0 or 1.
     """
-    from aria.guided.perceive import perceive
+    from collections import Counter
 
-    for order in ('row_major', 'size_asc', 'size_desc', 'color_asc'):
+    orderings = ('row_major', 'col_major', 'size_asc', 'size_desc', 'color_asc')
+    placements = ('top_left', 'centered')
+
+    for order in orderings:
         all_ok = True
         shared_params = None
 
@@ -1975,57 +2185,41 @@ def _derive_object_grid_pack(all_facts, demos):
                 all_ok = False
                 break
 
-            # Sort
-            if order == 'size_asc':
-                objs.sort(key=lambda o: (o.size, o.color))
-            elif order == 'size_desc':
-                objs.sort(key=lambda o: (-o.size, o.color))
-            elif order == 'color_asc':
-                objs.sort(key=lambda o: (o.color, -o.size))
-            else:
-                objs.sort(key=lambda o: (o.row, o.col))
+            _sort_objects(objs, order)
+            patches = [inp[o.row:o.row+o.height, o.col:o.col+o.width].copy()
+                       for o in objs]
 
-            patches = [inp[o.row:o.row+o.height, o.col:o.col+o.width].copy() for o in objs]
-            cell_h = max(o.height for o in objs)
-            cell_w = max(o.width for o in objs)
+            # Cell size candidates: max bbox, common-size mode
+            cell_sizes = set()
+            cell_sizes.add((max(o.height for o in objs), max(o.width for o in objs)))
+            size_counts = Counter((o.height, o.width) for o in objs)
+            mode_size = size_counts.most_common(1)[0][0]
+            cell_sizes.add(mode_size)
 
-            # Infer grid dims from output shape
-            out_h, out_w = out.shape
-            # Try with sep=0 and sep=1
             found = False
-            for sep in (0, 1):
-                for out_cols in range(1, len(objs) + 1):
-                    out_rows = (len(objs) + out_cols - 1) // out_cols
-                    th = out_rows * cell_h + max(0, out_rows - 1) * sep
-                    tw = out_cols * cell_w + max(0, out_cols - 1) * sep
-                    if th != out_h or tw != out_w:
-                        continue
-
-                    # Build candidate output
-                    candidate = np.full((th, tw), bg, dtype=inp.dtype)
-                    for idx, patch in enumerate(patches):
-                        gr = idx // out_cols
-                        gc = idx % out_cols
-                        if gr >= out_rows:
+            for cell_h, cell_w in cell_sizes:
+                if cell_h <= 0 or cell_w <= 0:
+                    continue
+                for sep in (0, 1):
+                    for out_cols in range(1, len(objs) + 1):
+                        out_rows = (len(objs) + out_cols - 1) // out_cols
+                        for placement in placements:
+                            params = _try_grid_pack(
+                                objs, patches, bg, inp.dtype, out,
+                                cell_h, cell_w, sep, out_cols, out_rows,
+                                order, placement)
+                            if params is not None:
+                                if shared_params is None:
+                                    shared_params = params
+                                elif (params['order'] != shared_params['order'] or
+                                      params['sep'] != shared_params['sep'] or
+                                      params['placement'] != shared_params['placement']):
+                                    all_ok = False
+                                found = True
+                                break
+                        if found:
                             break
-                        r0 = gr * (cell_h + sep)
-                        c0 = gc * (cell_w + sep)
-                        ph, pw = patch.shape
-                        h = min(ph, cell_h)
-                        w = min(pw, cell_w)
-                        candidate[r0:r0+h, c0:c0+w] = patch[:h, :w]
-
-                    if np.array_equal(candidate, out):
-                        params = {
-                            'order': order, 'cell_h': cell_h, 'cell_w': cell_w,
-                            'out_rows': out_rows, 'out_cols': out_cols, 'sep': sep,
-                        }
-                        if shared_params is None:
-                            shared_params = params
-                        elif (params['order'] != shared_params['order'] or
-                              params['sep'] != shared_params['sep']):
-                            all_ok = False
-                        found = True
+                    if found:
                         break
                 if found:
                     break
@@ -2104,8 +2298,43 @@ def _derive_panel_legend_map(all_facts, demos):
     return []
 
 
+def _extract_legend_pairs(legend, bg):
+    """Extract color pairs from a grid-like legend region.
+
+    Scans rows for adjacent non-bg color pairs (A, B) meaning A→B.
+    Falls back to column-wise pairs if row-wise yields nothing.
+    Returns a dict {src_color: tgt_color} or None if no pairs found.
+    """
+    pairs = {}
+    # Row-wise: each row with exactly 2 non-bg colors → pair
+    for r in range(legend.shape[0]):
+        row_colors = [int(x) for x in legend[r] if x != bg]
+        if len(row_colors) == 2 and row_colors[0] != row_colors[1]:
+            a, b = row_colors
+            if a in pairs and pairs[a] != b:
+                return None  # Inconsistent
+            pairs[a] = b
+    if pairs:
+        return pairs
+
+    # Column-wise: each column with exactly 2 non-bg colors → pair
+    for c in range(legend.shape[1]):
+        col_colors = [int(x) for x in legend[:, c] if x != bg]
+        if len(col_colors) == 2 and col_colors[0] != col_colors[1]:
+            a, b = col_colors
+            if a in pairs and pairs[a] != b:
+                return None
+            pairs[a] = b
+    return pairs if pairs else None
+
+
 def _try_legend_mapping(all_facts, demos, axis, sep_idx, legend_side):
-    """Try to derive a consistent color mapping from legend→target across demos."""
+    """Try to derive a consistent color mapping from legend→target across demos.
+
+    Preferred path: if legend is grid-like, derive mapping from adjacent
+    color pairs in legend rows/cols. Fallback: derive from target diffs,
+    requiring both source and target colors to appear in the legend.
+    """
     mappings = []
     for di, (inp, out) in enumerate(demos):
         bg = all_facts[di].bg
@@ -2132,32 +2361,44 @@ def _try_legend_mapping(all_facts, demos, axis, sep_idx, legend_side):
             return None
         if target_in.shape != target_out.shape:
             return None
-
-        # Legend must be smaller than target
         if legend.size >= target_in.size:
             return None
 
-        # Derive per-pixel color mapping from target_in → target_out
-        dm = {}
         diff_mask = target_in != target_out
         if not np.any(diff_mask):
-            continue  # No change — mapping is identity
+            continue  # Identity — no mapping needed
+
+        # Derive per-pixel diff mapping
+        dm = {}
         for r in range(target_in.shape[0]):
             for c in range(target_in.shape[1]):
                 if target_in[r, c] != target_out[r, c]:
                     src_c = int(target_in[r, c])
                     tgt_c = int(target_out[r, c])
                     if src_c in dm and dm[src_c] != tgt_c:
-                        return None  # Inconsistent mapping
+                        return None
                     dm[src_c] = tgt_c
 
-        # Verify both source and target colors appear in legend
         legend_colors = set(int(x) for x in legend.flat if x != bg)
+
+        # Preferred: derive mapping from legend pairs and verify against diff
+        legend_pairs = _extract_legend_pairs(legend, bg)
+        if legend_pairs is not None:
+            # Every diff entry must be explained by a legend pair
+            for src_c, tgt_c in dm.items():
+                if src_c not in legend_pairs or legend_pairs[src_c] != tgt_c:
+                    legend_pairs = None  # Pairs don't explain the diff
+                    break
+        if legend_pairs is not None:
+            mappings.append(dm)
+            continue
+
+        # Fallback: use diff mapping, require all colors in legend
         for src_c, tgt_c in dm.items():
             if src_c != bg and src_c not in legend_colors:
-                return None  # Source color not in legend
+                return None
             if tgt_c != bg and tgt_c not in legend_colors:
-                return None  # Target color not in legend
+                return None
 
         mappings.append(dm)
 
