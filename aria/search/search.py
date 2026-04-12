@@ -144,6 +144,19 @@ def _search_programs_inner(demos, time_budget, _deadline, _expired):
     if _expired():
         return None
 
+    # Phase 0g: Dims-change pre-filter — re-derive with shape constraint
+    if analysis.dims_change and dim_hypotheses:
+        from aria.search.derive import derive_programs as _derive_retry
+        retry_progs = _derive_retry(demos, deadline=_deadline)
+        for prog in retry_progs:
+            if _matches_dim_hypothesis(prog, demos, dim_hypotheses):
+                ast = prog.to_ast()
+                desc = f"search: {prog.provenance} [dims-gated]"
+                return ASTProgram(ast, desc, search_program=prog)
+
+    if _expired():
+        return None
+
     registry = proposal_prior.rank_schemas(build_seed_registry(), task_signatures)
 
     # Phase 1: single-step schemas
@@ -170,6 +183,10 @@ def _search_programs_inner(demos, time_budget, _deadline, _expired):
             max_demos=min(2, len(demos)),
         )
         for prog in candidates:
+            # Shape pre-filter for dims_change tasks
+            if analysis.dims_change and dim_hypotheses:
+                if not _matches_dim_hypothesis(prog, demos, dim_hypotheses):
+                    continue
             if prog.verify(demos):
                 ast = prog.to_ast()
                 desc = f"search: {prog.provenance} [{prog.signature}]"
@@ -230,3 +247,27 @@ def _search_programs_inner(demos, time_budget, _deadline, _expired):
                 return ASTProgram(ast, desc)
 
     return None
+
+
+def _matches_dim_hypothesis(prog, demos, hypotheses):
+    """Check if a program's output shape matches any dim hypothesis on demo 0."""
+    if not hypotheses:
+        return True
+    try:
+        result = prog.execute(demos[0][0])
+    except Exception:
+        return False
+    for h in hypotheses:
+        if h.shape is not None and result.shape == h.shape:
+            return True
+        if h.rule == 'scale_up':
+            k = h.meta.get('factor', 0)
+            inp_shape = demos[0][0].shape
+            if result.shape == (inp_shape[0] * k, inp_shape[1] * k):
+                return True
+        if h.rule == 'scale_down':
+            k = h.meta.get('factor', 0)
+            inp_shape = demos[0][0].shape
+            if k > 0 and result.shape == (inp_shape[0] // k, inp_shape[1] // k):
+                return True
+    return False
